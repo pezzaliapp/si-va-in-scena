@@ -74,12 +74,7 @@ L'app usa la Web Speech API del browser, cioè le voci già presenti nel sistema
 
 - **PDF supportati**: solo PDF con testo estraibile (esportati da Word, Pages, LibreOffice…).
   Per i PDF scansionati l'app mostra un messaggio; l'OCR locale potrà essere valutato in futuro.
-- **Riconoscimento**: il parser gestisce nomi in maiuscolo con `:`, `.` o `-`, nomi su una riga
-  da soli, nomi “Nome:” ricorrenti, battute su più righe e su più pagine, didascalie tra
-  parentesi (anche su più righe), atti e scene, battute corali (`TUTTI`, `A E B`), indicazioni
-  “fuori scena” e “insieme”, intestazioni e numeri di pagina. Non distingue le didascalie in
-  corsivo prive di parentesi (vengono segnalate come da verificare) e non gestisce dialoghi
-  impaginati su due colonne affiancate.
+- **Riconoscimento**: vedi la sezione *Formati di copione riconosciuti*.
 - **Safari / iOS**:
   - la voce parte solo dopo un tocco dell'utente (per questo la prova inizia da “Avvia”);
   - con lo schermo bloccato o l'app in background la lettura si interrompe;
@@ -90,6 +85,56 @@ L'app usa la Web Speech API del browser, cioè le voci già presenti nel sistema
 - **Chrome / Edge**: le voci vengono caricate in modo asincrono; i testi lunghi vengono divisi
   in frasi per evitare interruzioni note del motore di sintesi.
 - **Firefox**: non supporta l'installazione come PWA su desktop; l'app funziona comunque nel browser.
+
+## Formati di copione riconosciuti
+
+Il parser non usa nomi predefiniti: deduce il formato dal documento, sfruttando testo,
+geometria (rientri, colonne, spazi ampi, centratura, dimensione del carattere) e stile
+(grassetto, corsivo) ricavati localmente con PDF.js.
+
+Formati delle battute riconosciuti:
+
+| Formato | Esempio |
+| --- | --- |
+| Nome seguito da due punti | `VERA: Hai acceso la luce?` |
+| Nome seguito da trattino o punto | `VERA - Hai acceso…` · `VERA. Hai acceso…` |
+| Nome in colonna, separato da tabulazione o cella di tabella | `VERA      Hai acceso la luce?` |
+| Nome in grassetto seguito dalla battuta | **VERA** Hai acceso la luce? |
+| Nome su una riga da solo (anche centrato), battuta sotto | `VERA` ↵ `Hai acceso la luce?` |
+| Nome in maiuscolo seguito direttamente dalla battuta | `VERA Hai acceso la luce?` |
+| Nome in maiuscolo/minuscolo con due punti o in colonna | `Vera: Hai acceso…` |
+
+Vengono inoltre distinti:
+
+- il **frontespizio**: titolo (riconosciuto dalla dimensione del carattere), autore, crediti;
+- l'**elenco dei personaggi** (dopo “PERSONAGGI”, “INTERPRETI”, ecc.), i cui nomi aiutano il riconoscimento;
+- **atti e scene** (`ATTO I`, `SCENA SECONDA`, `PRIMO TEMPO`, `PROLOGO`…);
+- **didascalie** tra parentesi (anche su più righe) o interamente in corsivo;
+- **battute su più righe e su più pagine**, parole spezzate dal trattino;
+- **intestazioni e piè di pagina ripetuti** e numeri di pagina, che vengono rimossi;
+- **battute corali** (`TUTTI`, `VERA E GINO`), indicazioni “fuori scena” e “insieme”.
+
+Quando il documento usa in prevalenza un formato inequivocabile (es. due punti o colonne),
+i formati più deboli (nome maiuscolo senza separatore) valgono solo per nomi già riconosciuti,
+per non trasformare in personaggi parole scritte in maiuscolo.
+
+Non riconosciuti, o riconosciuti solo in parte (segnalati come *da verificare*):
+
+- PDF scansionati, senza testo selezionabile (messaggio esplicito; OCR non disponibile);
+- dialoghi impaginati su **due colonne affiancate** (battute simultanee in parallelo);
+- didascalie **senza parentesi e non in corsivo** dopo una battuta (segnalate, non attribuite);
+- nomi scritti in modi diversi nello stesso copione (es. `VERA` e `V.`): vanno uniti nella Verifica;
+- copioni in cui il nome non è distinguibile dal testo per posizione, punteggiatura, maiuscolo o grassetto.
+
+### Diagnostica locale di un PDF
+
+Se un copione non viene riconosciuto:
+
+- nell'app, la sezione **Verifica** contiene *Dati di lettura del PDF*: pagine, righe estratte,
+  battute per formato. Solo numeri, nessun testo;
+- da terminale, `npm run diagnose -- copione.pdf 1-3` mostra la struttura delle pagine indicate:
+  posizioni, dimensioni, font e la *forma* delle righe, con le lettere mascherate (`AAAA: Aaa…`).
+  Il testo del copione non viene mostrato né salvato e nulla esce dal computer.
 
 ## Sviluppo
 
@@ -113,7 +158,7 @@ src/
   speech/      voci di sistema, privacy rigorosa, Web Speech API
   db/          IndexedDB: copioni, impostazioni, backup, eliminazione
   ui/          interfaccia React
-scripts/       controllo anti-documenti riservati, generazione icone
+scripts/       controllo anti-documenti riservati, diagnostica PDF mascherata, generazione icone
 ```
 
 ### Protezione dei copioni nel repository

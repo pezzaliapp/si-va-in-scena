@@ -234,7 +234,7 @@ LEO: Bene.
     expect(p?.ambiguous).toBeTruthy();
   });
 
-  it('tratta l’elenco dei personaggi come didascalia', () => {
+  it('riconosce l’elenco dei personaggi come blocco a sé', () => {
     const s = parse(`
 PERSONAGGI
 NORA - una pittrice
@@ -244,7 +244,7 @@ ATTO I
 NORA: Sei tornato.
 IVO: Sono tornato.
 `);
-    expect(s.blocks[0]!.kind).toBe('direction');
+    expect(s.blocks[0]!.kind).toBe('cast');
     expect(s.blocks.filter((b) => b.kind === 'speech')).toHaveLength(2);
   });
 });
@@ -334,7 +334,7 @@ describe('pulizia impaginazione', () => {
       raw.push(
         ...page(p, [
           [30, 'La lanterna spenta — copione di prova'],
-          [100, `RIGA ${p}: testo.`],
+          [100, `RIGA: testo numero ${'abcd'[p - 1]}.`],
           [114, 'seguito.'],
           [770, `- ${p} -`],
         ]),
@@ -342,8 +342,8 @@ describe('pulizia impaginazione', () => {
     }
     const lines = cleanLines(raw);
     expect(lines.map((l) => l.text)).toEqual([
-      'RIGA 1: testo.', 'seguito.', 'RIGA 2: testo.', 'seguito.',
-      'RIGA 3: testo.', 'seguito.', 'RIGA 4: testo.', 'seguito.',
+      'RIGA: testo numero a.', 'seguito.', 'RIGA: testo numero b.', 'seguito.',
+      'RIGA: testo numero c.', 'seguito.', 'RIGA: testo numero d.', 'seguito.',
     ]);
   });
 
@@ -358,5 +358,122 @@ describe('pulizia impaginazione', () => {
       ]),
     );
     expect(lines.map((l) => l.paragraphBreak)).toEqual([false, false, false, true, false]);
+  });
+});
+
+describe('formati senza punteggiatura tra nome e battuta', () => {
+  it('nome in colonna separato da tabulazione, con battuta su più righe', () => {
+    const s = parse(`
+ATTO I
+ZENO\tHo trovato la chiave
+sotto il vaso dei gerani.
+LIA\tQuale vaso?
+ZENO\tQuello rotto.
+LIA\tAh.
+`);
+    expect(s.characters.map((c) => c.name)).toEqual(['ZENO', 'LIA']);
+    expect(s.blocks.filter((b) => b.kind === 'speech').map((b) => b.text)).toEqual([
+      'Ho trovato la chiave sotto il vaso dei gerani.',
+      'Quale vaso?',
+      'Quello rotto.',
+      'Ah.',
+    ]);
+  });
+
+  it('nome in maiuscolo seguito direttamente dalla battuta', () => {
+    const s = parse(`
+ZENO Ho trovato la chiave.
+LIA Quale chiave?
+ZENO Quella del garage.
+LIA Non abbiamo un garage.
+ZENO Appunto.
+LIA (ridendo) Allora è di qualcun altro.
+`);
+    expect(s.characters.map((c) => c.name)).toEqual(['ZENO', 'LIA']);
+    const sp = s.blocks.filter((b) => b.kind === 'speech');
+    expect(sp).toHaveLength(6);
+    expect(sp[5]!.note).toBe('ridendo');
+    expect(sp[5]!.text).toBe('Allora è di qualcun altro.');
+  });
+
+  it('nome in grassetto seguito dalla battuta', () => {
+    const line = (name: string, text: string) => ({
+      text: `${name} ${text}`,
+      page: 1,
+      paragraphBreak: false,
+      runs: [{ text: name, bold: true }, { text: ` ${text}` }],
+    });
+    const s = parseScript([line('Zeno', 'Ciao.'), line('Lia', 'Ciao a te.'), line('Zeno', 'Come va?'), line('Lia', 'Bene.')], {
+      fileName: 'x.pdf',
+    });
+    expect(s.characters.map((c) => c.name)).toEqual(['Zeno', 'Lia']);
+    expect(s.blocks.map((b) => b.text)).toEqual(['Ciao.', 'Ciao a te.', 'Come va?', 'Bene.']);
+  });
+
+  it('le righe in corsivo senza parentesi sono didascalie', () => {
+    const lines = linesFromText('ZENO\tCiao.\nLIA\tCiao.\nZenone entra in cucina.\nZENO\tEccomi.\nLIA\tBene.');
+    lines[2]!.italic = true;
+    const s = parseScript(lines, { fileName: 'x.pdf' });
+    const d = s.blocks.find((b) => b.text === 'Zenone entra in cucina.');
+    expect(d?.kind).toBe('direction');
+    expect(d?.ambiguous).toBeUndefined();
+  });
+
+  it('se il documento usa un formato forte, non inventa personaggi da parole maiuscole', () => {
+    const s = parse(
+      Array.from({ length: 6 }, () => 'ZENO: Una battuta.\nLIA: Una risposta.\nZENO: E allora?\nRAI Uno trasmette la partita.')
+        .join('\n'),
+    );
+    expect(s.characters.map((c) => c.name)).toEqual(['ZENO', 'LIA']);
+  });
+});
+
+describe('frontespizio e titolo', () => {
+  it('distingue titolo e crediti senza segnalarli come personaggi', () => {
+    const s = parseScript(
+      linesFromText(`
+DUE STANZE E UN GATTO
+Commedia di Autrice Immaginaria
+Tutti i diritti riservati
+
+ATTO I
+ZENO: Ciao.
+LIA: Ciao.
+ZENO: Ancora tu?
+LIA: Sempre io.
+`),
+      { fileName: 'x.pdf', title: 'DUE STANZE E UN GATTO' },
+    );
+    expect(s.blocks[0]!.kind).toBe('front');
+    expect(s.blocks.filter((b) => b.ambiguous)).toEqual([]);
+    expect(s.characters.map((c) => c.name)).toEqual(['ZENO', 'LIA']);
+  });
+
+  it('il titolo ripetuto non diventa un personaggio', () => {
+    const body = Array.from({ length: 4 }, () => 'IL GATTO NERO\nZENO\tCiao.\nLIA\tCiao.').join('\n');
+    const s = parseScript(linesFromText(body), { fileName: 'x.pdf', title: 'IL GATTO NERO' });
+    expect(s.characters.map((c) => c.name)).toEqual(['ZENO', 'LIA']);
+  });
+});
+
+describe('intestazioni ripetute', () => {
+  it('non scambia per intestazione un nome che ricorre su tutte le pagine in posizioni diverse', () => {
+    const raw: RawLine[] = [];
+    for (let p = 1; p <= 10; p++) {
+      for (let k = 0; k < 8; k++) {
+        raw.push({ text: k % 2 ? 'Una battuta diversa ' + p + k : 'MIRA', page: p, y: 100 + k * 14 + ((p * 37) % 300), pageHeight: 800 });
+      }
+    }
+    const kept = cleanLines(raw);
+    expect(kept.filter((l) => l.text === 'MIRA')).toHaveLength(40);
+  });
+
+  it('rimuove un’intestazione nella stessa posizione su ogni pagina', () => {
+    const raw: RawLine[] = [];
+    for (let p = 1; p <= 10; p++) {
+      raw.push({ text: 'IL GATTO NERO', page: p, y: 40, pageHeight: 800 });
+      raw.push({ text: `Testo ${p}.`, page: p, y: 120, pageHeight: 800 });
+    }
+    expect(cleanLines(raw).map((l) => l.text)).not.toContain('IL GATTO NERO');
   });
 });

@@ -11,7 +11,8 @@ import {
   splitBlock,
   updateBlock,
 } from '../script/edit';
-import { EVERYONE, type Block, type BlockKind, type Script } from '../types';
+import { CUE_STYLE_LABEL } from '../parser/parse';
+import { EVERYONE, type Block, type BlockKind, type CueStyle, type Script } from '../types';
 
 interface Props {
   script: Script;
@@ -20,7 +21,13 @@ interface Props {
 }
 
 const PAGE = 80;
-const KIND_LABEL: Record<BlockKind, string> = { speech: 'Battuta', direction: 'Didascalia', heading: 'Atto / scena' };
+const KIND_LABEL: Record<BlockKind, string> = {
+  speech: 'Battuta',
+  direction: 'Didascalia',
+  heading: 'Atto / scena',
+  front: 'Frontespizio / crediti',
+  cast: 'Elenco personaggi',
+};
 
 export default function Review({ script, onChange, onDone }: Props) {
   const [onlyAmbiguous, setOnlyAmbiguous] = useState(false);
@@ -45,6 +52,7 @@ export default function Review({ script, onChange, onDone }: Props) {
             {w}
           </p>
         ))}
+        {script.stats && <Diagnostics stats={script.stats} />}
       </section>
 
       <section className="panel">
@@ -160,6 +168,28 @@ export default function Review({ script, onChange, onDone }: Props) {
         Il copione è corretto: scegli il ruolo
       </button>
     </div>
+  );
+}
+
+/** Dati di lettura del PDF, senza testo: aiutano a capire un riconoscimento non riuscito. */
+function Diagnostics({ stats }: { stats: NonNullable<Script['stats']> }) {
+  const formats = (Object.entries(stats.formats) as [CueStyle, number][]).sort((a, b) => b[1] - a[1]);
+  return (
+    <details className="diagnostics">
+      <summary>Dati di lettura del PDF</summary>
+      <ul>
+        <li>Pagine con testo: {stats.pages}</li>
+        <li>Righe estratte: {stats.lines}</li>
+        <li>Battute riconosciute: {stats.speeches}</li>
+        {formats.map(([f, n]) => (
+          <li key={f}>
+            Formato «{CUE_STYLE_LABEL[f]}»: {n}
+          </li>
+        ))}
+        <li>Paragrafi senza personaggio da verificare: {stats.unattributed}</li>
+      </ul>
+      <p className="hint">Questi dati restano sul dispositivo.</p>
+    </details>
   );
 }
 

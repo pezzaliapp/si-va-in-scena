@@ -19,6 +19,7 @@
     "test": "vitest run",
     "check:sensitive": "node scripts/check-sensitive.mjs",
     "icons": "node scripts/make-icons.mjs",
+    "diagnose": "node scripts/diagnose-pdf.mjs",
     "verify": "npm run typecheck && npm run lint && npm test && npm run build",
     "prepare": "git config core.hooksPath .githooks || true"
   },

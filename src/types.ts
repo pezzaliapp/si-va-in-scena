@@ -1,7 +1,24 @@
 /** Identificatore speciale per le battute corali ("TUTTI"): include ogni personaggio. */
 export const EVERYONE = '*';
 
-export type BlockKind = 'speech' | 'direction' | 'heading';
+/**
+ * speech = battuta, direction = didascalia, heading = atto/scena,
+ * front = frontespizio (titolo, autore, crediti, note), cast = elenco dei personaggi.
+ */
+export type BlockKind = 'speech' | 'direction' | 'heading' | 'front' | 'cast';
+
+/** Formato con cui il nome del personaggio introduce la battuta. */
+export type CueStyle = 'colon' | 'dash' | 'dot' | 'tab' | 'bold' | 'standalone' | 'space' | 'mixed' | 'mixedTab';
+
+/** Statistiche dell'analisi, senza testo: utili per la diagnostica sul dispositivo. */
+export interface ParseStats {
+  pages: number;
+  lines: number;
+  speeches: number;
+  formats: Partial<Record<CueStyle, number>>;
+  /** Paragrafi senza personaggio segnalati come incerti. */
+  unattributed: number;
+}
 
 export interface Block {
   id: string;
@@ -34,6 +51,7 @@ export interface Script {
   characters: Character[];
   blocks: Block[];
   warnings: string[];
+  stats?: ParseStats;
 }
 
 export interface VoiceSetting {

@@ -16,6 +16,8 @@ export async function importPdf(file: File, onProgress?: (page: number, total: n
   const task = getDocument({
     data,
     disableFontFace: true,
+    // Conserva il nome dei font per riconoscere grassetto e corsivo.
+    fontExtraProperties: true,
     useSystemFonts: false,
     disableAutoFetch: true,
     disableStream: true,

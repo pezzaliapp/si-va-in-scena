@@ -1,15 +1,28 @@
-import { EVERYONE, type Block, type Character, type Script } from '../types';
+import { EVERYONE, type Block, type CueStyle, type ParseStats, type Script } from '../types';
 import type { Line } from './lines';
 
 const UP = 'A-ZÀ-ÖØ-Þ';
 const LOW = 'a-zß-öø-ÿ';
+const NAME_CHARS = `${UP}0-9'’.\\-&/, `;
 
 // "NOME: testo" (il nome può contenere punti, es. "SIG. ROSSI")
-const UPPER_COLON = new RegExp(`^([${UP}][${UP}0-9'’.\\-&/, ]{0,48}?)\\s*(?:\\(([^)]*)\\))?\\s*:\\s*(.*)$`);
+const UPPER_COLON = new RegExp(`^([${UP}][${NAME_CHARS}]{0,48}?)\\s*(?:\\(([^)]*)\\))?\\s*:\\s*(.*)$`);
 // "NOME. testo", "NOME - testo", "NOME" da solo
-const UPPER_OTHER = new RegExp(`^([${UP}][${UP}0-9'’\\-&/, ]{0,48}?)\\s*(?:\\(([^)]*)\\))?\\s*(?:([.\\-–—])\\s*(.*))?$`);
-// "Nome: testo" (solo con i due punti)
-const MIXED_COLON = new RegExp(`^([${UP}][${LOW}'’]+(?:\\s+[${UP}]?[${LOW}'’]+){0,2})\\s*(?:\\(([^)]*)\\))?\\s*:\\s*(.*)$`);
+const UPPER_OTHER = new RegExp(
+  `^([${UP}][${UP}0-9'’\\-&/, ]{0,48}?)\\s*(?:\\(([^)]*)\\))?\\s*(?:([.\\-–—])\\s*(.*))?$`,
+);
+// "NOME testo": nome in maiuscolo seguito direttamente dalla battuta
+const UPPER_SPACE = new RegExp(
+  `^((?:[${UP}][${UP}0-9'’.\\-]*\\s+){0,3}[${UP}][${UP}0-9'’.\\-]*)\\s*(?:\\(([^)]*)\\))?\\s+((?:[^\\s]*[${LOW}]|[(«"“'‘…\\[¿¡]).*)$`,
+);
+// "Nome: testo"
+const MIXED_COLON = new RegExp(
+  `^([${UP}][${LOW}'’]+(?:\\s+[${UP}]?[${LOW}'’]+){0,2})\\s*(?:\\(([^)]*)\\))?\\s*:\\s*(.*)$`,
+);
+// Nome isolato (in una cella, in grassetto o prima di una tabulazione)
+const NAME_ONLY = new RegExp(
+  `^([${UP}][${NAME_CHARS}]{0,48}?|[${UP}][${LOW}'’]+(?:\\s+[${UP}]?[${LOW}'’]+){0,2})\\s*(?:\\(([^)]*)\\))?\\s*[:.]?$`,
+);
 
 const ORDINALS =
   'PRIM[OA]|SECOND[OA]|TERZ[OA]|QUART[OA]|QUINT[OA]|SEST[OA]|SETTIM[OA]|OTTAV[OA]|NON[OA]|DECIM[OA]|UNIC[OA]|ULTIM[OA]|FIRST|SECOND|THIRD|FOURTH|FIFTH|ONE|TWO|THREE|FOUR|FIVE';
@@ -21,34 +34,51 @@ const HEADING_ORDINAL_FIRST = new RegExp(`^(${ORDINALS})\\s+(ATTO|TEMPO|QUADRO|P
 const HEADING_WORD = /^(PROLOGO|EPILOGO|PROLOGUE|EPILOGUE|INTERMEZZO|INTERVALLO)\b[^a-z]{0,40}$/;
 const CAST_HEADER =
   /^(PERSONAGGI(\s+E\s+INTERPRETI)?|INTERPRETI|DRAMATIS PERSONAE|CHARACTERS|CAST)\s*[:.]?$/i;
-const CAST_MAX_LINES = 40;
+const CAST_MAX_LINES = 60;
 
 // Parole maiuscole che non sono mai nomi di personaggi.
 const NOT_NAMES = new Set([
-  'NO', 'SI', 'SÌ', 'OK', 'AH', 'OH', 'EH', 'BEH', 'MAH', 'BOH', 'AHI', 'EHI', 'OHI', 'UH', 'HA', 'HEY',
+  'NO', 'SI', 'SÌ', 'OK', 'AH', 'OH', 'EH', 'BEH', 'MAH', 'BOH', 'AHI', 'EHI', 'OHI', 'UH', 'HA', 'HEY', 'IO',
+  'TU', 'LUI', 'LEI', 'NOI', 'VOI', 'LORO', 'MA', 'E', 'O', 'IL', 'LA', 'LO', 'GLI', 'LE', 'UN', 'UNA', 'CHE',
   'FINE', 'THE END', 'SIPARIO', 'BUIO', 'PAUSA', 'SILENZIO', 'NOTA', 'NOTE', 'CURTAIN', 'BLACKOUT',
   'END', 'INT', 'EXT', 'CUT TO', 'DISSOLVENZA', 'FADE OUT', 'FADE IN', 'MUSICA', 'LUCE', 'LUCI',
   'PERSONAGGI', 'INTERPRETI', 'CHARACTERS', 'CAST', 'ATTO', 'SCENA', 'ACT', 'SCENE', 'PROLOGO', 'EPILOGO',
+  'TV', 'SMS', 'PS',
 ]);
 const EVERYONE_NAMES = new Set(['TUTTI', 'TUTTE', 'TUTTI INSIEME', 'TUTTE INSIEME', 'ALL', 'EVERYONE']);
 const OFFSTAGE = /fuori\s*scena|f\.\s*s\.|da\s*fuori|dall'esterno|\boff\b|\bo\.\s*s\.|\bv\.\s*o\.|voce\s+fuori/i;
 const TOGETHER = /insieme|contemporaneamente|simultane|together/i;
 const MULTI_SEPARATOR = /\s*(?:,|\/|&|\bE\b|\bED\b|\bAND\b)\s*/;
 
+/** Formati in cui il nome è separato in modo inequivocabile dalla battuta. */
+const STRONG: ReadonlySet<CueStyle> = new Set(['colon', 'dash', 'tab', 'bold', 'standalone']);
+/** Sopra questo numero di battute in formato forte, i formati deboli valgono solo per nomi già noti. */
+const STRONG_DOMINANT = 10;
+
+export const CUE_STYLE_LABEL: Record<CueStyle, string> = {
+  colon: 'NOME: battuta',
+  dash: 'NOME - battuta',
+  dot: 'NOME. battuta',
+  tab: 'nome in colonna, separato dalla battuta',
+  bold: 'nome in grassetto seguito dalla battuta',
+  standalone: 'nome su una riga da solo, battuta sotto',
+  space: 'NOME battuta (senza separatore)',
+  mixed: 'Nome: battuta',
+  mixedTab: 'Nome in colonna, separato dalla battuta',
+};
+
 interface Cue {
   key: string;
   display: string;
   note?: string;
   rest: string;
-  style: 'colon' | 'other' | 'standalone' | 'mixed';
-  /** Separatore a trattino ("NOME - testo"): segnale forte quanto i due punti. */
-  dash?: boolean;
+  style: CueStyle;
 }
 
 function normKey(name: string): string {
   return name
     .toUpperCase()
-    .replace(/[.’]/g, (c) => (c === '’' ? "'" : ''))
+    .replace(/[.’:]/g, (c) => (c === '’' ? "'" : ''))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -59,42 +89,79 @@ function letters(s: string): number {
 
 function looksLikeName(name: string): boolean {
   const words = name.trim().split(/\s+/);
-  return letters(name) >= 2 && words.length <= 5 && name.length <= 40;
+  return letters(name) >= 2 && words.length <= 5 && name.trim().length <= 40;
+}
+
+const UPPER_NAME = new RegExp(`^[${UP}][${NAME_CHARS}]*$`);
+const HAS_LOWER = new RegExp(`[${LOW}]`);
+const isUpperName = (s: string) => UPPER_NAME.test(s.trim()) && !HAS_LOWER.test(s);
+
+function makeCue(name: string, note: string | undefined, rest: string, style: CueStyle): Cue {
+  return {
+    key: normKey(name),
+    display: name.trim().replace(/[:.]$/, '').trim(),
+    note: note?.trim() || undefined,
+    rest: rest.replace(/\t/g, ' ').trim(),
+    style,
+  };
 }
 
 /** Riconosce una possibile intestazione di battuta, senza decidere se il nome è valido. */
-export function matchCue(text: string): Cue | null {
-  let m = UPPER_COLON.exec(text);
-  if (m && looksLikeName(m[1]!)) {
-    return { key: normKey(m[1]!), display: m[1]!.trim(), note: m[2]?.trim(), rest: m[3]!.trim(), style: 'colon' };
+export function matchCue(input: Line | string): Cue | null {
+  const line: Line = typeof input === 'string' ? { text: input, page: 1, paragraphBreak: false } : input;
+  const raw = line.text;
+
+  // 1. Nome separato dalla battuta da uno spazio ampio (tabulazione, colonna, tabella).
+  const tab = raw.indexOf('\t');
+  if (tab > 0) {
+    const m = NAME_ONLY.exec(raw.slice(0, tab).trim());
+    const rest = raw.slice(tab + 1);
+    if (m && looksLikeName(m[1]!) && rest.trim()) {
+      return makeCue(m[1]!, m[2], rest, isUpperName(m[1]!) ? 'tab' : 'mixedTab');
+    }
   }
+
+  // 2. Nome in grassetto seguito da testo normale.
+  const runs = line.runs?.filter((r) => r.text.trim());
+  if (runs && runs.length > 1 && runs[0]!.bold && runs.slice(1).some((r) => !r.bold)) {
+    const head = runs[0]!.text.trim();
+    const m = NAME_ONLY.exec(head);
+    if (m && looksLikeName(m[1]!)) {
+      return makeCue(m[1]!, m[2], raw.slice(raw.indexOf(head) + head.length), 'bold');
+    }
+  }
+
+  const text = raw.replace(/\t/g, ' ');
+  let m = UPPER_COLON.exec(text);
+  if (m && looksLikeName(m[1]!)) return makeCue(m[1]!, m[2], m[3]!, 'colon');
+
   m = UPPER_OTHER.exec(text);
   if (m && looksLikeName(m[1]!)) {
     const sep = m[3];
     const rest = (m[4] ?? '').trim();
-    // Dopo il punto deve iniziare una frase, non continuare una parola maiuscola.
-    if (sep === '.' && rest && !new RegExp(`^[${UP}(«"“'‘…\\[\\-–—¿¡]`).test(rest)) return null;
-    if (sep && sep !== '.' && !rest) return null;
-    return {
-      key: normKey(m[1]!),
-      display: m[1]!.trim(),
-      note: m[2]?.trim(),
-      rest,
-      style: sep ? 'other' : 'standalone',
-      ...(sep && sep !== '.' ? { dash: true } : {}),
-    };
+    if (!sep) return makeCue(m[1]!, m[2], '', 'standalone');
+    if (sep === '.') {
+      // Dopo il punto deve iniziare una frase, non continuare una parola maiuscola.
+      if (rest && !new RegExp(`^[${UP}(«"“'‘…\\[\\-–—¿¡]`).test(rest)) return null;
+      return makeCue(m[1]!, m[2], rest, rest ? 'dot' : 'standalone');
+    }
+    if (rest) return makeCue(m[1]!, m[2], rest, 'dash');
   }
+
   m = MIXED_COLON.exec(text);
-  if (m) {
-    return { key: normKey(m[1]!), display: m[1]!.trim(), note: m[2]?.trim(), rest: m[3]!.trim(), style: 'mixed' };
-  }
+  if (m) return makeCue(m[1]!, m[2], m[3]!, 'mixed');
+
+  m = UPPER_SPACE.exec(text);
+  if (m && looksLikeName(m[1]!)) return makeCue(m[1]!, m[2], m[3]!, 'space');
+
   return null;
 }
 
 export function headingLevel(text: string): 1 | 2 | null {
-  if (text.length > 80) return null;
-  const m = HEADING_NUMBERED.exec(text) ?? HEADING_ORDINAL_FIRST.exec(text);
-  const word = m ? (HEADING_NUMBERED.test(text) ? m[1]! : m[2]!) : HEADING_WORD.exec(text)?.[1];
+  const t = text.replace(/\t/g, ' ');
+  if (t.length > 80) return null;
+  const m = HEADING_NUMBERED.exec(t) ?? HEADING_ORDINAL_FIRST.exec(t);
+  const word = m ? (HEADING_NUMBERED.test(t) ? m[1]! : m[2]!) : HEADING_WORD.exec(t)?.[1];
   if (!word) return null;
   return /^(SCENA|SCENE|QUADRO)$/i.test(word) ? 2 : 1;
 }
@@ -119,9 +186,19 @@ function hasTextAfterParen(text: string): boolean {
 }
 
 function appendText(prev: string, next: string): string {
-  if (!prev) return next;
-  if (/[\p{Ll}]-$/u.test(prev) && /^[\p{Ll}]/u.test(next)) return prev.slice(0, -1) + next;
-  return prev + ' ' + next;
+  const n = next.replace(/\t/g, ' ');
+  if (!prev) return n;
+  if (/[\p{Ll}]-$/u.test(prev) && /^[\p{Ll}]/u.test(n)) return prev.slice(0, -1) + n;
+  return prev + ' ' + n;
+}
+
+const MIXED_NAME = new RegExp(`^[${UP}][${LOW}'’]+(?:\\s+[${UP}]?[${LOW}'’]+){0,2}$`);
+
+/** Nome all'inizio di una voce dell'elenco personaggi ("VERA, guardiana del faro"). */
+function castEntryName(text: string): string | null {
+  const head = text.split(/\t|,|:|;|\s[-–—]\s|\s\(|\s{2,}/)[0]!.trim().replace(/[.]$/, '');
+  if (!head || !looksLikeName(head) || head.split(/\s+/).length > 4) return null;
+  return isUpperName(head) || MIXED_NAME.test(head) ? normKey(head) : null;
 }
 
 export interface ParseOptions {
@@ -132,36 +209,67 @@ export interface ParseOptions {
 }
 
 /**
- * Analizza le righe di un copione e ne ricava personaggi, battute,
- * didascalie e intestazioni. Le attribuzioni incerte vengono segnalate
- * nel campo `ambiguous` invece di essere indovinate.
+ * Analizza le righe di un copione e ne ricava frontespizio, elenco dei
+ * personaggi, battute, didascalie e intestazioni. Il formato delle battute
+ * viene dedotto dal documento stesso; le attribuzioni incerte vengono
+ * segnalate nel campo `ambiguous` invece di essere indovinate.
  */
 export function parseScript(lines: Line[], opts: ParseOptions): Script {
-  // Primo passaggio: conteggio dei possibili nomi.
-  const counts = new Map<string, { n: number; display: string; strong: boolean }>();
-  const cues = lines.map((l) => (headingLevel(l.text) ? null : matchCue(l.text)));
-  cues.forEach((c, i) => {
-    if (!c) return;
-    // Un nome isolato su una riga vale solo se seguito da testo.
-    if (c.style === 'standalone' && !lines[i + 1]) return;
-    const parts = splitMulti(c.key);
-    for (const part of parts.length > 1 ? [c.key, ...parts] : [c.key]) {
-      const e = counts.get(part) ?? { n: 0, display: part === c.key ? c.display : part, strong: false };
-      e.n++;
-      if (c.style === 'colon' || c.style === 'standalone' || c.dash) e.strong = true;
-      counts.set(part, e);
+  const title = opts.title?.trim() || opts.fileName.replace(/\.pdf$/i, '');
+  const titleKey = normKey(title);
+
+  // Passaggio 0: elenco dei personaggi, se presente (termina a fine pagina o a un'intestazione).
+  const castLine = new Set<number>();
+  const castNames = new Set<string>();
+  lines.forEach((l, i) => {
+    if (!CAST_HEADER.test(l.text.replace(/\t/g, ' ').trim())) return;
+    for (let j = i + 1; j < lines.length && j <= i + CAST_MAX_LINES; j++) {
+      const e = lines[j]!;
+      if (headingLevel(e.text) || e.page !== l.page) break;
+      castLine.add(j);
+      const name = castEntryName(e.text);
+      if (name) castNames.add(name);
     }
   });
 
-  const isAccepted = (key: string, style: Cue['style']): boolean => {
-    if (NOT_NAMES.has(key)) return false;
-    const e = counts.get(key);
-    if (!e) return false;
-    if (style === 'mixed') return e.n >= 3;
-    return e.n >= 3 || (e.n >= 2 && e.strong);
+  // Primo passaggio: possibili nomi, con il formato in cui compaiono.
+  const isBigType = (l: Line) => (l.size ?? 1) >= 1.4;
+  const cues = lines.map((l, i) => {
+    if (castLine.has(i) || headingLevel(l.text) || isBigType(l) || l.italic) return null;
+    const c = matchCue(l);
+    if (!c || c.key === titleKey || NOT_NAMES.has(c.key)) return null;
+    // Un nome isolato su una riga vale solo se seguito da testo.
+    if (c.style === 'standalone') {
+      const next = lines[i + 1];
+      if (!next || matchCue(next)?.style === 'standalone' || headingLevel(next.text)) return null;
+    }
+    return c;
+  });
+  const counts = new Map<string, { n: number; strong: number; display: string }>();
+  let strongTotal = 0;
+  for (const c of cues) {
+    if (!c) continue;
+    const parts = splitMulti(c.key);
+    if (STRONG.has(c.style)) strongTotal++;
+    for (const part of parts.length > 1 ? [c.key, ...parts] : [c.key]) {
+      const e = counts.get(part) ?? { n: 0, strong: 0, display: part === c.key ? c.display : part };
+      e.n++;
+      if (STRONG.has(c.style)) e.strong++;
+      counts.set(part, e);
+    }
+  }
+
+  const known = (key: string) => castNames.has(key) || (counts.get(key)?.strong ?? 0) >= 2;
+  const isAccepted = (key: string, style: CueStyle): boolean => {
+    if (NOT_NAMES.has(key) || key === titleKey) return false;
+    if (known(key)) return true;
+    if (STRONG.has(style)) return false;
+    // Formati deboli: se il documento usa già un formato forte, valgono solo per nomi noti.
+    if (strongTotal >= STRONG_DOMINANT) return false;
+    return (counts.get(key)?.n ?? 0) >= 3;
   };
 
-  const characters: Character[] = [];
+  const characters: Script['characters'] = [];
   const idByKey = new Map<string, string>();
   const characterId = (key: string, display: string): string => {
     let id = idByKey.get(key);
@@ -174,30 +282,29 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
   };
 
   const rareNames = new Set<string>();
-
   /** Restituisce gli id dei personaggi, oppure null se il nome non è riconosciuto. */
-  const resolveSpeakers = (cue: Cue): string[] | null => {
-    if (EVERYONE_NAMES.has(cue.key)) return [EVERYONE];
-    const parts = splitMulti(cue.key);
+  const resolveSpeakers = (c: Cue, inBody: boolean): string[] | null => {
+    if (EVERYONE_NAMES.has(c.key)) return [EVERYONE];
+    const parts = splitMulti(c.key);
     if (parts.length > 1 && parts.every((p) => EVERYONE_NAMES.has(p) || isAccepted(p, 'colon'))) {
       return parts.map((p) => (EVERYONE_NAMES.has(p) ? EVERYONE : characterId(p, p)));
     }
-    if (isAccepted(cue.key, cue.style)) return [characterId(cue.key, cue.display)];
-    // "NOME: testo" è un segnale forte: un personaggio con una sola battuta
-    // viene creato comunque, ma segnalato da verificare.
-    if (cue.style === 'colon' && !NOT_NAMES.has(cue.key)) {
-      rareNames.add(cue.key);
-      return [characterId(cue.key, cue.display)];
+    if (isAccepted(c.key, c.style)) return [characterId(c.key, c.display)];
+    // Un nome con una sola battuta in formato forte viene creato, ma segnalato.
+    if (inBody && (c.style === 'colon' || c.style === 'tab' || c.style === 'bold') && c.rest) {
+      rareNames.add(c.key);
+      return [characterId(c.key, c.display)];
     }
     return null;
   };
 
   const blocks: Block[] = [];
+  const formats: Partial<Record<CueStyle, number>> = {};
   let cur: Block | null = null;
   let curIsClosedParen = false;
   let openParen = false;
-  let castLeft = 0;
   let lastSpeech: Block | null = null;
+  let inBody = false;
 
   const push = (b: Omit<Block, 'id'>): Block => {
     const block = { id: `b${blocks.length + 1}`, ...b };
@@ -206,9 +313,11 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
     curIsClosedParen = false;
     return block;
   };
+  const speakerNames = (ids: string[]) =>
+    ids.map((id) => (id === EVERYONE ? 'TUTTI' : (characters.find((ch) => ch.id === id)?.name ?? id))).join(', ');
 
   lines.forEach((line, i) => {
-    const t = line.text;
+    const t = line.text.replace(/\t/g, ' ');
 
     if (openParen && cur) {
       cur.text = appendText(cur.text, t);
@@ -217,51 +326,58 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
       return;
     }
 
-    const level = headingLevel(t);
+    const level = headingLevel(line.text);
     if (level) {
+      inBody = true;
       push({ kind: 'heading', speakers: [], text: t, level, page: line.page });
-      castLeft = 0;
       return;
     }
 
-    if (CAST_HEADER.test(t)) {
-      push({ kind: 'direction', speakers: [], text: t, page: line.page });
-      castLeft = CAST_MAX_LINES;
-      return;
-    }
-    if (castLeft > 0) {
-      castLeft--;
-      const c: Block | null = cur;
-      if (c && c.kind === 'direction') c.text += '\n' + t;
-      else push({ kind: 'direction', speakers: [], text: t, page: line.page });
+    if (castLine.has(i) || CAST_HEADER.test(t.trim())) {
+      const c = cur as Block | null;
+      if (c && c.kind === 'cast' && castLine.has(i)) c.text += '\n' + t;
+      else push({ kind: 'cast', speakers: [], text: t, page: line.page });
       return;
     }
 
-    const cue = cues[i];
-    const speakers = cue ? resolveSpeakers(cue) : null;
-    if (cue && speakers) {
-      const note = cue.note || undefined;
+    const cueHere = cues[i];
+    const speakers = cueHere ? resolveSpeakers(cueHere, inBody) : null;
+    if (cueHere && speakers) {
+      inBody = true;
+      formats[cueHere.style] = (formats[cueHere.style] ?? 0) + 1;
+      const note = cueHere.note;
       const block = push({
         kind: 'speech',
         speakers,
-        text: cue.rest,
+        text: cueHere.rest,
         page: line.page,
         ...(note ? { note } : {}),
-        ...(rareNames.has(cue.key) ? { ambiguous: `Personaggio con una sola battuta: "${cue.display}"` } : {}),
         ...(note && OFFSTAGE.test(note) ? { offstage: true } : {}),
         ...(speakers.length > 1 || speakers[0] === EVERYONE || (note && TOGETHER.test(note))
           ? { simultaneous: true }
           : {}),
+        ...(rareNames.has(cueHere.key) ? { ambiguous: `Personaggio con una sola battuta: "${cueHere.display}"` } : {}),
       });
+      if ((line.text.match(/\t/g) ?? []).length >= 2) {
+        block.ambiguous ??= 'Riga con più colonne: possibili battute affiancate, verificare';
+      }
       lastSpeech = block;
       return;
     }
 
-    const unknownName =
-      cue && cue.style !== 'mixed' && !NOT_NAMES.has(cue.key)
-        ? `Possibile personaggio non riconosciuto: "${cue.display}"`
-        : undefined;
     const c = cur as Block | null;
+
+    // Prima del corpo del copione: titolo, crediti, note.
+    if (!inBody) {
+      if (c && c.kind === 'front' && !line.paragraphBreak && !isBigType(line)) c.text = appendText(c.text, t);
+      else push({ kind: 'front', speakers: [], text: t, page: line.page });
+      return;
+    }
+
+    const unknownName =
+      cueHere && cueHere.style !== 'space' && cueHere.style !== 'mixed'
+        ? `Possibile personaggio non riconosciuto: "${cueHere.display}"`
+        : undefined;
 
     if (/^[([]/.test(t)) {
       if (c && c.kind === 'speech' && !curIsClosedParen && !line.paragraphBreak && hasTextAfterParen(t)) {
@@ -274,6 +390,13 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
       return;
     }
 
+    // Riga interamente in corsivo: didascalia.
+    if (line.italic) {
+      if (c && c.kind === 'direction' && !curIsClosedParen && !line.paragraphBreak) c.text = appendText(c.text, t);
+      else push({ kind: 'direction', speakers: [], text: t, page: line.page });
+      return;
+    }
+
     // Testo semplice senza nome di personaggio.
     if (c && c.kind === 'speech' && (!line.paragraphBreak || c.text === '')) {
       c.text = appendText(c.text, t);
@@ -281,15 +404,13 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
       return;
     }
     if (c && c.kind === 'direction' && curIsClosedParen && lastSpeech) {
-      const names = lastSpeech.speakers
-        .map((id) => (id === EVERYONE ? 'TUTTI' : characters.find((ch) => ch.id === id)?.name ?? id))
-        .join(', ');
       lastSpeech = push({
         kind: 'speech',
         speakers: [...lastSpeech.speakers],
         text: t,
         page: line.page,
-        ambiguous: unknownName ?? `Battuta senza nome dopo una didascalia: attribuita a ${names}`,
+        ambiguous:
+          unknownName ?? `Battuta senza nome dopo una didascalia: attribuita a ${speakerNames(lastSpeech.speakers)}`,
       });
       return;
     }
@@ -308,24 +429,41 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
     if (b.kind === 'speech' && !b.text && !b.ambiguous) b.ambiguous = 'Battuta senza testo';
   }
 
+  const speechCount = blocks.filter((b) => b.kind === 'speech').length;
+  const stats: ParseStats = {
+    lines: lines.length,
+    pages: new Set(lines.map((l) => l.page)).size,
+    speeches: speechCount,
+    formats,
+    unattributed: blocks.filter((b) => b.kind === 'direction' && b.ambiguous).length,
+  };
+
   const now = opts.now ?? Date.now();
   const warnings: string[] = [];
   if (characters.length === 0) {
     warnings.push(
       'Nessun personaggio riconosciuto. Il formato del copione potrebbe non essere supportato: verifica e correggi manualmente.',
     );
+  } else {
+    const main = (Object.entries(formats) as [CueStyle, number][]).sort((a, b) => b[1] - a[1])[0];
+    if (main && speechCount > 0) {
+      warnings.push(
+        `Formato delle battute riconosciuto: ${CUE_STYLE_LABEL[main[0]]} (${Math.round((main[1] / speechCount) * 100)}% delle battute).`,
+      );
+    }
   }
   const ambiguousCount = blocks.filter((b) => b.ambiguous).length;
   if (ambiguousCount > 0) warnings.push(`${ambiguousCount} passaggi da verificare.`);
 
   return {
     id: opts.id ?? `s${now.toString(36)}${Math.random().toString(36).slice(2, 7)}`,
-    title: opts.title?.trim() || opts.fileName.replace(/\.pdf$/i, ''),
+    title,
     fileName: opts.fileName,
     importedAt: now,
     updatedAt: now,
     characters,
     blocks,
     warnings,
+    stats,
   };
 }

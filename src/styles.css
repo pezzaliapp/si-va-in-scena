@@ -449,6 +449,21 @@ section + section {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+.block.front .text,
+.block.cast .text {
+  color: var(--ink-2);
+  white-space: pre-line;
+}
+.diagnostics {
+  margin-top: 12px;
+  color: var(--ink-2);
+}
+.diagnostics summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
 .block.flagged {
   background: var(--warn-soft);
 }
