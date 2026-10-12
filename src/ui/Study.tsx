@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { isActorLine } from '../rehearsal/plan';
 import { speakerLabel } from '../script/edit';
+import { segmentSpeech } from '../script/segments';
 import type { Block, Script } from '../types';
 
 interface Props {
@@ -71,7 +72,13 @@ export default function Study({ script, role, onChooseRole }: Props) {
                 </p>
               )}
               {visible ? (
-                <p className="mine-text">{line.text}</p>
+                <p className="mine-text">
+                  {segmentSpeech(line.text).map((seg, i) => (
+                    <span key={i} className={seg.kind === 'direction' ? 'inline-direction' : undefined}>
+                      {seg.text}{' '}
+                    </span>
+                  ))}
+                </p>
               ) : (
                 <button className="btn reveal" onClick={() => setShown((s) => new Set(s).add(line.id))}>
                   Mostra la battuta

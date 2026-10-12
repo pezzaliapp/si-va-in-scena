@@ -1,3 +1,5 @@
+import type { PacingSettings } from './pacing/pacing';
+
 /** Identificatore speciale per le battute corali ("TUTTI"): include ogni personaggio. */
 export const EVERYONE = '*';
 
@@ -71,6 +73,10 @@ export interface ScriptSettings {
   mode: Mode;
   /** Id del blocco intestazione della scena selezionata; null = copione intero. */
   sceneId: string | null;
+  /** Regia vocale: ritmo, pause, lettura delle didascalie. */
+  pacing?: PacingSettings;
+  /** Voce narrante per le didascalie (se lette). */
+  narrator?: VoiceSetting;
 }
 
 export interface GlobalPrefs {

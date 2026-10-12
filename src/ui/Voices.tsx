@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { lineCounts } from '../script/edit';
 import { previewVoice } from '../speech/speaker';
-import { speakableText } from '../speech/text';
+import { spokenText } from '../script/segments';
 import {
   appLang,
   autoAssign,
@@ -59,7 +59,7 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
     const resolved = resolveVoice(settings.voices[id], infos, prefs.strictPrivacy, lang);
     if (!resolved) return;
     const sample =
-      script.blocks.map((b) => (b.speakers.includes(id) ? speakableText(b.text) : '')).find((t) => t.length > 0) ??
+      script.blocks.map((b) => (b.speakers.includes(id) ? spokenText(b.text) : '')).find((t) => t.length > 0) ??
       'Si va in scena.';
     previewVoice(
       voices.find((v) => v.voiceURI === resolved.voiceURI),
@@ -164,6 +164,27 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
             );
           })}
         </ul>
+        <div className="voice-row">
+          <div className="row spread">
+            <strong>Voce narrante</strong>
+            <span className="count">didascalie, se attivata la lettura</span>
+          </div>
+          <select
+            className="select"
+            value={usable.some((u) => u.uri === settings.narrator?.voiceURI) ? settings.narrator!.voiceURI! : ''}
+            aria-label="Voce narrante"
+            onChange={(e) =>
+              onChange({ narrator: { rate: 1, pitch: 1, ...settings.narrator, voiceURI: e.target.value || null } })
+            }
+          >
+            <option value="">Voce predefinita</option>
+            {usable.map((u) => (
+              <option key={u.uri} value={u.uri}>
+                {u.name} ({u.lang}){u.local ? '' : ' · rete'}
+              </option>
+            ))}
+          </select>
+        </div>
         <p className="hint">L’intonazione non è supportata da tutte le voci: su alcuni sistemi non ha effetto.</p>
       </section>
 

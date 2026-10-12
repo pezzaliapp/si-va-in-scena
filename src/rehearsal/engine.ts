@@ -1,4 +1,4 @@
-import { chunkText, speakableText } from '../speech/text';
+import type { Arrival, Step } from '../pacing/pacing';
 import type { PlanItem } from './plan';
 
 export interface SpeakOptions {
@@ -13,50 +13,81 @@ export interface Speaker {
   cancel(): void;
 }
 
+/** Attesa annullabile, usata per le pause della regia. */
+export interface Timer {
+  wait(ms: number): Promise<'end' | 'cancelled'>;
+  cancel(): void;
+}
+
+export const realTimer = (): Timer => {
+  let pending: { id: ReturnType<typeof setTimeout>; resolve: (r: 'end' | 'cancelled') => void } | null = null;
+  return {
+    wait(ms) {
+      return new Promise((resolve) => {
+        const id = setTimeout(() => {
+          pending = null;
+          resolve('end');
+        }, ms);
+        pending = { id, resolve };
+      });
+    },
+    cancel() {
+      if (!pending) return;
+      clearTimeout(pending.id);
+      pending.resolve('cancelled');
+      pending = null;
+    },
+  };
+};
+
 export type Status = 'idle' | 'speaking' | 'paused' | 'waiting' | 'finished';
 
 export interface EngineState {
   status: Status;
   /** Posizione nel piano di prova. */
   index: number;
+  /** Parte della battuta corrente in lettura (indice in performBlock), se nota. */
+  part: number | null;
 }
 
 export interface EngineDeps {
   speaker: Speaker;
-  textOf(item: PlanItem): string;
-  voiceOf(item: PlanItem): SpeakOptions;
+  timer: Timer;
+  /** Passi da eseguire per la battuta `index`, in base a come ci si arriva. */
+  stepsOf(index: number, arrival: Arrival): Step[];
+  voiceOf(index: number, step: Extract<Step, { type: 'say' }>): SpeakOptions;
   onChange(state: EngineState): void;
 }
 
 /**
- * Motore della prova: legge le battute degli altri personaggi e si ferma
- * sul turno dell'attore finché non riceve il comando "Continua".
+ * Motore della prova: esegue frasi e pause delle battute degli altri
+ * personaggi e attende senza limiti di tempo sul turno dell'attore, finché
+ * non riceve "Continua". Pausa e ripresa ripartono dalla frase interrotta.
  */
 export class RehearsalEngine {
   private status: Status = 'idle';
-  private index: number;
-  private chunk = 0;
+  private index = 0;
+  private part: number | null = null;
+  private steps: Step[] | null = null;
+  private step = 0;
   private run = 0;
 
   constructor(
     private readonly plan: PlanItem[],
     private readonly deps: EngineDeps,
-    startIndex = 0,
-  ) {
-    this.index = Math.min(Math.max(0, startIndex), Math.max(0, plan.length - 1));
-  }
+  ) {}
 
   get state(): EngineState {
-    return { status: this.status, index: this.index };
+    return { status: this.status, index: this.index, part: this.part };
   }
 
-  /** Avvia (o riavvia) la lettura dalla posizione corrente. */
+  /** Avvia la lettura dalla posizione corrente (dall'inizio se il copione è finito). */
   start(): void {
     if (this.plan.length === 0) return this.set('finished');
     this.interrupt();
     if (this.status === 'finished') this.index = 0;
-    this.chunk = 0;
-    void this.loop();
+    this.reset();
+    void this.loop('user');
   }
 
   pause(): void {
@@ -67,40 +98,60 @@ export class RehearsalEngine {
 
   /** Riprende dopo una pausa, oppure passa oltre la battuta dell'attore. */
   continue(): void {
-    if (this.status === 'paused') return void this.loop();
-    if (this.status === 'waiting') return this.goTo(this.index + 1, true);
+    if (this.status === 'paused') {
+      // Una pausa di regia interrotta non va ripetuta: si riprende dalla frase.
+      if (this.steps?.[this.step]?.type === 'pause') this.step++;
+      return void this.loop('user');
+    }
+    if (this.status === 'waiting') return this.move(this.index + 1, true, 'afterActor');
     if (this.status === 'idle') this.start();
   }
 
-  /** Ripete la battuta corrente dall'inizio. */
+  /**
+   * Ripete dall'inizio la battuta corrente. Sul turno dell'attore ripete
+   * la battuta d'attacco che lo precede e torna ad attendere.
+   */
   repeat(): void {
-    this.goTo(this.index, true);
+    const prev = this.plan[this.index - 1];
+    if (this.status === 'waiting' && prev && !prev.actor) return this.move(this.index - 1, true, 'user');
+    this.move(this.index, true, 'user');
   }
 
   previous(): void {
-    this.goTo(this.index - 1, this.isRunning());
+    this.move(this.index - 1, this.isRunning(), 'user');
   }
 
   next(): void {
-    this.goTo(this.index + 1, this.isRunning());
+    this.move(this.index + 1, this.isRunning(), 'user');
   }
 
-  /** Salta a una posizione del piano. */
+  /** Salta a una posizione del piano; se `play`, avvia la lettura. */
   goTo(index: number, play: boolean): void {
-    this.interrupt();
-    if (index >= this.plan.length) {
-      this.index = Math.max(0, this.plan.length - 1);
-      return this.set('finished');
-    }
-    this.index = Math.max(0, index);
-    this.chunk = 0;
-    if (play) void this.loop();
-    else this.set(this.status === 'idle' ? 'idle' : 'paused');
+    this.move(index, play, 'user');
   }
 
   stop(): void {
     this.interrupt();
     this.set('idle');
+  }
+
+  private move(index: number, play: boolean, arrival: Arrival): void {
+    this.interrupt();
+    if (index >= this.plan.length) {
+      this.index = Math.max(0, this.plan.length - 1);
+      this.reset();
+      return this.set('finished');
+    }
+    this.index = Math.max(0, index);
+    this.reset();
+    if (play) void this.loop(arrival);
+    else this.set(this.status === 'idle' ? 'idle' : 'paused');
+  }
+
+  private reset(): void {
+    this.steps = null;
+    this.step = 0;
+    this.part = null;
   }
 
   private isRunning(): boolean {
@@ -109,7 +160,8 @@ export class RehearsalEngine {
 
   private interrupt(): void {
     this.run++;
-    if (this.status === 'speaking') this.deps.speaker.cancel();
+    this.deps.speaker.cancel();
+    this.deps.timer.cancel();
   }
 
   private set(status: Status): void {
@@ -117,26 +169,37 @@ export class RehearsalEngine {
     this.deps.onChange(this.state);
   }
 
-  private async loop(): Promise<void> {
+  private async loop(arrival: Arrival): Promise<void> {
     const run = ++this.run;
     while (this.index < this.plan.length) {
       const item = this.plan[this.index]!;
       if (item.actor) {
-        this.chunk = 0;
+        this.reset();
         return this.set('waiting');
       }
-      const chunks = chunkText(speakableText(this.deps.textOf(item)));
+      this.steps ??= this.deps.stepsOf(this.index, arrival);
       this.set('speaking');
-      while (this.chunk < chunks.length) {
-        const result = await this.deps.speaker.speak(chunks[this.chunk]!, this.deps.voiceOf(item));
+      while (this.step < this.steps.length) {
+        const s = this.steps[this.step]!;
+        let result: 'end' | 'cancelled';
+        if (s.type === 'pause') {
+          result = await this.deps.timer.wait(s.ms);
+        } else {
+          this.part = s.part;
+          this.deps.onChange(this.state);
+          result = await this.deps.speaker.speak(s.text, this.deps.voiceOf(this.index, s));
+        }
         if (run !== this.run) return;
+        // Annullamento non richiesto (errore della sintesi): ci si ferma senza perdere il punto.
         if (result === 'cancelled') return this.set('paused');
-        this.chunk++;
+        this.step++;
       }
-      this.chunk = 0;
       if (this.index + 1 >= this.plan.length) break;
       this.index++;
+      this.reset();
+      arrival = 'auto';
     }
+    this.reset();
     this.set('finished');
   }
 }

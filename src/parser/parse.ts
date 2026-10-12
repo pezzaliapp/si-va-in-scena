@@ -1,3 +1,4 @@
+import { segmentSpeech, wordCount } from '../script/segments';
 import { EVERYONE, type Block, type CueStyle, type ParseStats, type Script } from '../types';
 import type { Line } from './lines';
 
@@ -35,6 +36,10 @@ const HEADING_WORD = /^(PROLOGO|EPILOGO|PROLOGUE|EPILOGUE|INTERMEZZO|INTERVALLO)
 const CAST_HEADER =
   /^(PERSONAGGI(\s+E\s+INTERPRETI)?|INTERPRETI|DRAMATIS PERSONAE|CHARACTERS|CAST)\s*[:.]?$/i;
 const CAST_MAX_LINES = 60;
+/** Righe oltre le quali una parentesi aperta viene considerata non chiusa. */
+const OPEN_PAREN_MAX_LINES = 15;
+/** Didascalie interne più lunghe di così diventano blocchi autonomi. */
+const INLINE_DIRECTION_MAX_WORDS = 8;
 
 // Parole maiuscole che non sono mai nomi di personaggi.
 const NOT_NAMES = new Set([
@@ -201,6 +206,75 @@ function castEntryName(text: string): string | null {
   return isUpperName(head) || MIXED_NAME.test(head) ? normKey(head) : null;
 }
 
+/**
+ * Separa dalle battute le didascalie interne lunghe o non chiuse, che
+ * diventano blocchi autonomi nella stessa posizione. Le didascalie brevi
+ * ("(ride)", "(chiama)") restano nella battuta. Nessun testo viene perso:
+ * i blocchi risultanti, concatenati, riproducono il testo originale.
+ */
+export function separateInlineDirections(blocks: Block[]): Block[] {
+  const out: Block[] = [];
+  for (const b of blocks) {
+    if (b.kind !== 'speech') {
+      out.push(b);
+      continue;
+    }
+    const segs = segmentSpeech(b.text);
+    const isLong = (s: (typeof segs)[number]) =>
+      s.kind === 'direction' && (s.unclosed || wordCount(s.text) > INLINE_DIRECTION_MAX_WORDS);
+    if (!segs.some(isLong)) {
+      out.push(b);
+      continue;
+    }
+    // Raggruppa: parti di battuta (testo + didascalie brevi) e didascalie lunghe.
+    const groups: { direction: boolean; text: string; unclosed?: boolean }[] = [];
+    for (const s of segs) {
+      const last = groups.at(-1);
+      if (isLong(s)) groups.push({ direction: true, text: s.text, unclosed: s.unclosed });
+      else if (last && !last.direction) last.text += ' ' + s.text;
+      else groups.push({ direction: false, text: s.text });
+    }
+    let k = 0;
+    let firstSpeech = true;
+    for (const g of groups) {
+      const id = k === 0 ? b.id : `${b.id}.${k}`;
+      k++;
+      const hasSpoken = !g.direction && segmentSpeech(g.text).some((s) => s.kind === 'spoken');
+      if (!hasSpoken) {
+        const prev = out.at(-1);
+        // Didascalie consecutive nate dalla stessa battuta vengono unite.
+        if (prev && prev.kind === 'direction' && prev.id.startsWith(`${b.id}.`)) prev.text += ' ' + g.text;
+        else {
+          out.push({
+            id,
+            kind: 'direction',
+            speakers: [],
+            text: g.text,
+            page: b.page,
+            ...(g.unclosed ? { ambiguous: 'Parentesi della didascalia non chiusa: verificare dove termina' } : {}),
+          });
+        }
+        continue;
+      }
+      out.push(
+        firstSpeech
+          ? { ...b, id, text: g.text }
+          : {
+              id,
+              kind: 'speech',
+              speakers: [...b.speakers],
+              text: g.text,
+              page: b.page,
+              ...(b.simultaneous ? { simultaneous: true } : {}),
+              ...(b.offstage ? { offstage: true } : {}),
+            },
+      );
+      firstSpeech = false;
+    }
+  }
+  return out;
+}
+
 export interface ParseOptions {
   fileName: string;
   title?: string;
@@ -305,6 +379,16 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
   let openParen = false;
   let lastSpeech: Block | null = null;
   let inBody = false;
+  let openParenLines = 0;
+  /** La riga i è una battuta in formato forte di un personaggio già riconosciuto. */
+  const cueStrongAccepted = (i: number) => {
+    const c = cues[i];
+    return !!c && STRONG.has(c.style) && c.style !== 'standalone' && known(c.key);
+  };
+  const trackParen = (b: Block) => {
+    openParen = !isParenBalanced(b.text);
+    openParenLines = 0;
+  };
 
   const push = (b: Omit<Block, 'id'>): Block => {
     const block = { id: `b${blocks.length + 1}`, ...b };
@@ -319,11 +403,22 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
   lines.forEach((line, i) => {
     const t = line.text.replace(/\t/g, ' ');
 
+    // Didascalia aperta (autonoma o interna a una battuta): le righe successive
+    // ne fanno parte finché la parentesi non si chiude, anche se iniziano con un
+    // nome in maiuscolo. Un'intestazione, una battuta inequivocabile dopo uno
+    // stacco o troppe righe interrompono l'attesa e la parte viene segnalata.
     if (openParen && cur) {
-      cur.text = appendText(cur.text, t);
-      openParen = !isParenBalanced(cur.text);
-      curIsClosedParen = !openParen;
-      return;
+      const c0 = cueStrongAccepted(i);
+      if (headingLevel(line.text) || (line.paragraphBreak && c0) || openParenLines >= OPEN_PAREN_MAX_LINES) {
+        openParen = false;
+        cur.ambiguous ??= 'Parentesi della didascalia non chiusa: verificare dove termina';
+      } else {
+        cur.text = appendText(cur.text, t);
+        openParenLines++;
+        openParen = !isParenBalanced(cur.text);
+        if (cur.kind === 'direction') curIsClosedParen = !openParen;
+        return;
+      }
     }
 
     const level = headingLevel(line.text);
@@ -362,6 +457,7 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
         block.ambiguous ??= 'Riga con più colonne: possibili battute affiancate, verificare';
       }
       lastSpeech = block;
+      trackParen(block);
       return;
     }
 
@@ -382,10 +478,12 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
     if (/^[([]/.test(t)) {
       if (c && c.kind === 'speech' && !curIsClosedParen && !line.paragraphBreak && hasTextAfterParen(t)) {
         c.text = appendText(c.text, t);
+        trackParen(c);
         return;
       }
       push({ kind: 'direction', speakers: [], text: t, page: line.page });
       openParen = !isParenBalanced(t);
+      openParenLines = 0;
       curIsClosedParen = !openParen;
       return;
     }
@@ -401,6 +499,7 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
     if (c && c.kind === 'speech' && (!line.paragraphBreak || c.text === '')) {
       c.text = appendText(c.text, t);
       if (unknownName && !c.ambiguous) c.ambiguous = unknownName;
+      trackParen(c);
       return;
     }
     if (c && c.kind === 'direction' && curIsClosedParen && lastSpeech) {
@@ -425,6 +524,9 @@ export function parseScript(lines: Line[], opts: ParseOptions): Script {
     }
   });
 
+  const finalBlocks = separateInlineDirections(blocks);
+  blocks.length = 0;
+  blocks.push(...finalBlocks);
   for (const b of blocks) {
     if (b.kind === 'speech' && !b.text && !b.ambiguous) b.ambiguous = 'Battuta senza testo';
   }

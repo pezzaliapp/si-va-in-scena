@@ -691,3 +691,71 @@ section + section {
     animation: none !important;
   }
 }
+
+/* ------------------------------------------------------------ regia e prova */
+.rhythm {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+}
+.rhythm > summary {
+  cursor: pointer;
+  font-weight: 600;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.rhythm > * + * {
+  margin-top: 12px;
+}
+.current-speaker .who {
+  font-size: 1.15rem;
+  text-transform: uppercase;
+}
+.tag {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0;
+}
+.inline-direction {
+  font-style: italic;
+  color: var(--ink-2);
+  font-size: 0.85em;
+}
+.sentence.now {
+  background: var(--accent-soft);
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.current.narration .current-text {
+  font-style: italic;
+  color: var(--ink-2);
+}
+.next-mine {
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  background: var(--surface);
+}
+.next-mine-label {
+  margin: 0 0 4px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent);
+}
+.next-mine-text {
+  margin: 0;
+  font-family: var(--serif);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.next-mine-text.muted {
+  color: var(--ink-2);
+  font-style: italic;
+}

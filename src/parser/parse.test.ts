@@ -477,3 +477,67 @@ describe('intestazioni ripetute', () => {
     expect(cleanLines(raw).map((l) => l.text)).not.toContain('IL GATTO NERO');
   });
 });
+
+describe('didascalie interne alle battute', () => {
+  const S = (t: string) => parseScript(linesFromText(t), { fileName: 'x.pdf' });
+
+  it('separa una didascalia lunga che inizia sulla riga della battuta', () => {
+    const s = S(
+      'ALBA\tCiao.\nBRUNO\tCiao.\nALBA\t(chiama) Papà! (Entra Bruno. Siccome Bruno è al mercato e Alba\nin cucina, la scena si svolge su due piani.)\nBRUNO\tEccomi.\nALBA\tFinalmente.',
+    );
+    const i = s.blocks.findIndex((b) => b.text === '(chiama) Papà!');
+    expect(s.blocks[i]!.kind).toBe('speech');
+    expect(s.blocks[i + 1]).toMatchObject({
+      kind: 'direction',
+      text: '(Entra Bruno. Siccome Bruno è al mercato e Alba in cucina, la scena si svolge su due piani.)',
+    });
+    expect(s.blocks[i + 2]!.text).toBe('Eccomi.');
+  });
+
+  it('non scambia un nome maiuscolo dentro una didascalia aperta per una nuova battuta', () => {
+    const s = S(
+      'ALBA\tCiao.\nBRUNO\tCiao.\nALBA\tVieni! (Entra lentamente, mentre\nBRUNO resta fermo a guardare\nla finestra.)\nBRUNO\tEccomi.\nALBA\tFinalmente.',
+    );
+    expect(s.blocks.map((b) => `${b.kind}:${b.text}`)).toEqual([
+      'speech:Ciao.',
+      'speech:Ciao.',
+      'speech:Vieni!',
+      'direction:(Entra lentamente, mentre BRUNO resta fermo a guardare la finestra.)',
+      'speech:Eccomi.',
+      'speech:Finalmente.',
+    ]);
+  });
+
+  it('mantiene nella battuta le didascalie brevi', () => {
+    const s = S('ALBA\t(ride) Ma dai! (pausa) Davvero?\nBRUNO\tSì.\nALBA\tOk.\nBRUNO\tOk.');
+    expect(s.blocks[0]).toMatchObject({ kind: 'speech', text: '(ride) Ma dai! (pausa) Davvero?' });
+  });
+
+  it('una didascalia lunga a metà battuta divide la battuta senza cambiare personaggio', () => {
+    const s = S(
+      'ALBA\tAspetta. (Si alza, va alla finestra, guarda a lungo la strada deserta e torna indietro.) Niente.\nBRUNO\tLo sapevo.\nALBA\tCerto.\nBRUNO\tCerto.',
+    );
+    expect(s.blocks.slice(0, 3).map((b) => `${b.kind}:${b.speakers.join()}:${b.text}`)).toEqual([
+      'speech:p1:Aspetta.',
+      'direction::(Si alza, va alla finestra, guarda a lungo la strada deserta e torna indietro.)',
+      'speech:p1:Niente.',
+    ]);
+  });
+
+  it('una parentesi mai chiusa viene segnalata e non assorbe il resto del copione', () => {
+    const body = Array.from({ length: 4 }, (_, k) => `ALBA\tBattuta ${k}.\nBRUNO\tRisposta ${k}.`).join('\n');
+    const s = S(`ALBA\tVieni! (entra\n\n${body}`);
+    expect(s.blocks.filter((b) => b.kind === 'speech').length).toBeGreaterThanOrEqual(8);
+    expect(s.blocks.some((b) => b.ambiguous?.includes('non chiusa'))).toBe(true);
+  });
+
+  it('separando le didascalie non si perde testo', () => {
+    const src =
+      'ALBA\tUno (a) due. (Questa è una didascalia piuttosto lunga che descrive un movimento in scena.) Tre.\nBRUNO\tQuattro.\nALBA\tCinque.\nBRUNO\tSei.';
+    const s = S(src);
+    const joined = s.blocks.map((b) => b.text).join(' ');
+    expect(joined).toBe(
+      'Uno (a) due. (Questa è una didascalia piuttosto lunga che descrive un movimento in scena.) Tre. Quattro. Cinque. Sei.',
+    );
+  });
+});

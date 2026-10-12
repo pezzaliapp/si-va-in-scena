@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { RehearsalEngine, type EngineState } from '../rehearsal/engine';
-import { buildPlan } from '../rehearsal/plan';
+import { DEFAULT_PACING, TEMPO_MAX, TEMPO_MIN, type PacingSettings } from '../pacing/pacing';
+import { createDirector, type Director } from '../rehearsal/director';
+import { RehearsalEngine, realTimer, type EngineState } from '../rehearsal/engine';
+import { buildPlan, nextActorIndex } from '../rehearsal/plan';
 import { speakerLabel } from '../script/edit';
 import { WebSpeechSpeaker } from '../speech/speaker';
 import { appLang, resolveVoice, speechSupported, toInfo } from '../speech/voices';
-import { EVERYONE, type GlobalPrefs, type Mode, type Script, type ScriptSettings } from '../types';
+import type { GlobalPrefs, Mode, Script, ScriptSettings } from '../types';
 
 interface Props {
   script: Script;
@@ -20,70 +22,82 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: 'full', label: 'Lettura completa', hint: 'L’app legge tutto il copione, comprese le tue battute.' },
 ];
 
-const STATUS_LABEL: Record<EngineState['status'], string> = {
-  idle: 'Pronto',
-  speaking: 'In lettura',
-  paused: 'In pausa',
-  waiting: 'Tocca a te',
-  finished: 'Fine',
-};
+const fmtSeconds = (ms: number) => `${(ms / 1000).toFixed(2).replace('.', ',')} s`;
 
 export default function Rehearsal({ script, settings, voices, prefs, onChange }: Props) {
   const { role, mode, sceneId } = settings;
-  const plan = useMemo(() => buildPlan(script, role, mode, sceneId), [script, role, mode, sceneId]);
-  const [state, setState] = useState<EngineState>({ status: 'idle', index: 0 });
+  const pacing: PacingSettings = { ...DEFAULT_PACING, ...settings.pacing };
+  const readDirections = pacing.readDirections;
+  const plan = useMemo(
+    () => buildPlan(script, role, mode, sceneId, readDirections),
+    [script, role, mode, sceneId, readDirections],
+  );
+  const [state, setState] = useState<EngineState>({ status: 'idle', index: 0, part: null });
   const [revealedIndex, setRevealedIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<RehearsalEngine | null>(null);
+  const speakerRef = useRef<WebSpeechSpeaker | null>(null);
 
-  // Valori letti dal motore al momento di ogni battuta, senza ricrearlo.
+  // Valori letti dal motore al momento di ogni frase, senza ricrearlo.
   const live = useRef({ settings, voices, prefs, onChange });
   useEffect(() => {
     live.current = { settings, voices, prefs, onChange };
   });
 
+  // Solo per la visualizzazione delle parti della battuta (nessuna voce, nessun ref).
+  const display: Director = useMemo(
+    () => createDirector(script, plan, () => DEFAULT_PACING, () => ({ voiceURI: null, rate: 1, pitch: 1 })),
+    [script, plan],
+  );
+
   const infos = useMemo(() => voices.map(toInfo), [voices]);
-  const noVoice = speechSupported() && voices.length > 0 && !resolveVoice(undefined, infos, prefs.strictPrivacy, appLang());
+  const noVoice =
+    speechSupported() && voices.length > 0 && !resolveVoice(undefined, infos, prefs.strictPrivacy, appLang());
 
   useEffect(() => {
     const { settings: st } = live.current;
     const startIndex = Math.max(0, plan.findIndex((p) => p.blockIndex >= st.position));
-    const speaker = speechSupported()
-      ? new WebSpeechSpeaker(() => live.current.voices, setError)
-      : { speak: async () => 'cancelled' as const, cancel() {} };
-    const engine = new RehearsalEngine(
+    const speaker = speechSupported() ? new WebSpeechSpeaker(() => live.current.voices, setError) : null;
+    const director = createDirector(
+      script,
       plan,
-      {
-        speaker,
-        textOf: (item) => script.blocks[item.blockIndex]!.text,
-        voiceOf: (item) => {
-          const { settings: s, voices: v, prefs: p } = live.current;
-          const id = script.blocks[item.blockIndex]!.speakers.find((x) => x !== EVERYONE);
-          return (
-            resolveVoice(id ? s.voices[id] : undefined, v.map(toInfo), p.strictPrivacy, appLang()) ?? {
-              voiceURI: null,
-              rate: 1,
-              pitch: 1,
-            }
-          );
-        },
-        onChange: (s) => {
-          setState(s);
-          const item = plan[s.index];
-          if (item) live.current.onChange({ position: item.blockIndex });
-        },
+      () => ({ ...DEFAULT_PACING, ...live.current.settings.pacing }),
+      (character, narrator) => {
+        const { settings: s, voices: v, prefs: p } = live.current;
+        const setting = narrator ? s.narrator : character ? s.voices[character] : undefined;
+        return resolveVoice(setting, v.map(toInfo), p.strictPrivacy, appLang()) ?? { voiceURI: null, rate: 1, pitch: 1 };
       },
     );
+    speakerRef.current = speaker;
+    const engine = new RehearsalEngine(plan, {
+      speaker: speaker ?? { speak: async () => 'cancelled' as const, cancel() {} },
+      timer: realTimer(),
+      stepsOf: director.stepsOf,
+      voiceOf: director.voiceOf,
+      onChange: (s) => {
+        setState(s);
+        const item = plan[s.index];
+        if (item) live.current.onChange({ position: item.blockIndex });
+      },
+    });
     engineRef.current = engine;
     // Notifica lo stato iniziale tramite onChange.
     engine.goTo(startIndex, false);
     return () => engine.stop();
   }, [plan, script]);
 
+  const act = (fn: (e: RehearsalEngine) => void) => {
+    setError(null);
+    // Sblocca la sintesi vocale dentro il gesto dell'utente (necessario su iOS).
+    speakerRef.current?.prime();
+    if (engineRef.current) fn(engineRef.current);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const engine = engineRef.current;
-      if (!engine || (e.target as HTMLElement).closest('input, select, textarea, button')) return;
+      if (!engine || (e.target as HTMLElement).closest('input, select, textarea, button, summary')) return;
+      speakerRef.current?.prime();
       if (e.key === ' ') {
         e.preventDefault();
         if (engine.state.status === 'speaking') engine.pause();
@@ -96,15 +110,38 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const setPacing = (patch: Partial<PacingSettings>) => onChange({ pacing: { ...pacing, ...patch } });
+
   const scenes = script.blocks.filter((b) => b.kind === 'heading');
   const item = plan[state.index];
   const block = item ? script.blocks[item.blockIndex] : undefined;
-  const context = item ? script.blocks.slice(Math.max(0, item.blockIndex - 3), item.blockIndex) : [];
+  const parts = item ? display.parts(state.index) : [];
+  const context = item
+    ? script.blocks
+        .slice(0, item.blockIndex)
+        .filter((b) => b.kind !== 'front' && b.kind !== 'cast')
+        .slice(-2)
+    : [];
   const hidden = mode === 'memorize' && item?.actor && revealedIndex !== state.index;
-  const act = (fn: (e: RehearsalEngine) => void) => {
-    setError(null);
-    if (engineRef.current) fn(engineRef.current);
-  };
+  const actorNext = role && mode !== 'full' ? nextActorIndex(plan, item?.actor ? state.index + 1 : state.index) : -1;
+  const actorBlock = actorNext >= 0 ? script.blocks[plan[actorNext]!.blockIndex] : undefined;
+  const speakerName = block ? (item?.narrator ? 'Didascalia' : speakerLabel(script, block.speakers)) : '';
+  const roleName = script.characters.find((c) => c.id === role)?.name;
+
+  const statusText = (() => {
+    switch (state.status) {
+      case 'speaking':
+        return item?.narrator ? 'Lettura della didascalia' : `Sta parlando: ${speakerName}`;
+      case 'waiting':
+        return `Tocca a te${roleName ? ` — ${roleName}` : ''}. Recita, poi premi Continua.`;
+      case 'paused':
+        return 'In pausa';
+      case 'finished':
+        return 'Fine della parte selezionata';
+      default:
+        return 'Pronto';
+    }
+  })();
 
   return (
     <div className="stack">
@@ -148,6 +185,58 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
         {!role && mode !== 'full' && (
           <p className="notice">Non hai scelto un ruolo: l’app leggerà tutte le battute senza fermarsi.</p>
         )}
+
+        <details className="rhythm">
+          <summary>Ritmo della prova</summary>
+          <label className="field">
+            Ritmo generale: {pacing.tempo < 0.9 ? 'disteso' : pacing.tempo > 1.1 ? 'serrato' : 'naturale'}
+            <input
+              type="range"
+              min={TEMPO_MIN}
+              max={TEMPO_MAX}
+              step={0.05}
+              value={pacing.tempo}
+              onChange={(e) => setPacing({ tempo: Number(e.target.value) })}
+            />
+          </label>
+          <label className="field">
+            Pausa tra un personaggio e l’altro: {fmtSeconds(pacing.speakerPauseMs)}
+            <input
+              type="range"
+              min={0}
+              max={1500}
+              step={50}
+              value={pacing.speakerPauseMs}
+              onChange={(e) => setPacing({ speakerPauseMs: Number(e.target.value) })}
+            />
+          </label>
+          <label className="field">
+            Pausa dopo la tua battuta: {fmtSeconds(pacing.afterActorPauseMs)}
+            <input
+              type="range"
+              min={0}
+              max={1500}
+              step={50}
+              value={pacing.afterActorPauseMs}
+              onChange={(e) => setPacing({ afterActorPauseMs: Number(e.target.value) })}
+            />
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={pacing.readDirections}
+              onChange={(e) => setPacing({ readDirections: e.target.checked })}
+            />
+            Leggi anche le didascalie (voce narrante, impostabile in Voci)
+          </label>
+          <p className="hint">
+            Il ritmo agisce soprattutto sulle pause tra frasi e tra personaggi; la velocità delle voci cambia solo di
+            poco. Dopo una battuta interrotta (“—” o “…”) il personaggio successivo attacca subito.
+          </p>
+          <button className="btn ghost" onClick={() => onChange({ pacing: { ...DEFAULT_PACING } })}>
+            Ripristina il ritmo predefinito
+          </button>
+        </details>
       </section>
 
       {!speechSupported() && <p className="alert">Questo browser non supporta la sintesi vocale.</p>}
@@ -165,7 +254,7 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
 
       <section className={`stage ${state.status}`} aria-live="polite">
         <div className="stage-status">
-          <span className="status-label">{STATUS_LABEL[state.status]}</span>
+          <span className="status-label">{statusText}</span>
           {plan.length > 0 && (
             <span className="progress">
               {state.index + 1} / {plan.length}
@@ -176,19 +265,22 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
           <p className="empty">Nessuna battuta da leggere in questa parte.</p>
         ) : (
           <>
-            <div className="context">
-              {context.map((b) => (
-                <p key={b.id} className={`ctx ${b.kind}`}>
-                  {b.kind === 'speech' && <strong>{speakerLabel(script, b.speakers)}: </strong>}
-                  {b.text}
-                </p>
-              ))}
-            </div>
+            {context.length > 0 && (
+              <div className="context">
+                {context.map((b) => (
+                  <p key={b.id} className={`ctx ${b.kind}`}>
+                    {b.kind === 'speech' && <strong>{speakerLabel(script, b.speakers)}: </strong>}
+                    {b.text}
+                  </p>
+                ))}
+              </div>
+            )}
             {block && (
-              <div className={`current ${item?.actor ? 'mine' : ''}`}>
+              <div className={`current ${item?.actor ? 'mine' : ''} ${item?.narrator ? 'narration' : ''}`}>
                 <p className="current-speaker">
-                  {speakerLabel(script, block.speakers)}
+                  <span className="who">{speakerName}</span>
                   {block.note ? <span className="note"> ({block.note})</span> : null}
+                  {block.offstage ? <span className="tag">fuori scena</span> : null}
                   {item?.actor && <span className="badge">La tua battuta</span>}
                 </p>
                 {hidden ? (
@@ -196,13 +288,38 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
                     Mostra la battuta
                   </button>
                 ) : (
-                  <p className="current-text">{block.text}</p>
+                  <p className="current-text">
+                    {parts.map((p, i) => (
+                      <span
+                        key={i}
+                        className={`${p.kind === 'direction' ? 'inline-direction' : 'sentence'}${
+                          state.status === 'speaking' && state.part === i ? ' now' : ''
+                        }`}
+                      >
+                        {p.text}{' '}
+                      </span>
+                    ))}
+                  </p>
                 )}
               </div>
             )}
           </>
         )}
       </section>
+
+      {actorBlock && actorNext !== state.index && (
+        <section className="next-mine" aria-label="La tua prossima battuta">
+          <p className="next-mine-label">
+            La tua prossima battuta
+            {actorNext - state.index === 1 ? ' — subito dopo' : ` — fra ${actorNext - state.index} battute`}
+          </p>
+          {mode === 'memorize' ? (
+            <p className="next-mine-text muted">(nascosta in modalità Memoria)</p>
+          ) : (
+            <p className="next-mine-text">{actorBlock.text}</p>
+          )}
+        </section>
+      )}
 
       <section className="controls" aria-label="Comandi della prova">
         {state.status === 'speaking' ? (
@@ -214,7 +331,11 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
             Continua
           </button>
         ) : (
-          <button className="btn primary large" onClick={() => act((e) => e.start())} disabled={plan.length === 0 || noVoice}>
+          <button
+            className="btn primary large"
+            onClick={() => act((e) => e.start())}
+            disabled={plan.length === 0 || noVoice}
+          >
             Avvia
           </button>
         )}
@@ -228,7 +349,10 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
           Successiva →
         </button>
       </section>
-      <p className="hint center">Da tastiera: Spazio avvia/pausa/continua, frecce per spostarsi, R per ripetere.</p>
+      <p className="hint center">
+        Da tastiera: Spazio avvia/pausa/continua, frecce per spostarsi, R per ripetere. Sul tuo turno, “Ripeti” fa
+        riascoltare la battuta d’attacco.
+      </p>
     </div>
   );
 }

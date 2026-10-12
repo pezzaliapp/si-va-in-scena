@@ -61,6 +61,31 @@ L'app usa la Web Speech API del browser, cioè le voci già presenti nel sistema
 - **Nessun riconoscimento vocale**: per proseguire dopo la tua battuta si usa “Continua”
   (o la barra spaziatrice). Il riconoscimento vocale dei browser è spesso remoto e non viene usato.
 
+### Regia vocale
+
+Tra il copione e la sintesi c'è un modulo di regia (`src/pacing/`), indipendente dal parser
+e dal motore vocale, che decide *come* leggere:
+
+- divide le battute in **frasi** (rispettando abbreviazioni come “sig.” e “dott.”, iniziali,
+  numeri decimali, punteggiatura multipla, virgolette) e le pronuncia una alla volta;
+- inserisce **pause temporizzate** dopo punto, domanda, esclamazione e puntini di sospensione,
+  e non dopo le virgole: dentro la frase l'intonazione resta affidata alla voce;
+- applica una **pausa tra personaggi** regolabile; dopo una battuta interrotta (“—”, “…”) chi
+  segue attacca subito;
+- il **ritmo generale** agisce soprattutto sulle pause, e solo marginalmente sulla velocità;
+- nessuna pausa supera 1,5 secondi;
+- le **didascalie** restano visibili ma non vengono lette, salvo l'opzione “Leggi anche le
+  didascalie”, che usa la voce narrante;
+- sul turno dell'attore l'attesa è **illimitata** fino a “Continua”, con una breve pausa
+  d'attacco regolabile. “Ripeti” ricomincia la battuta corrente; sul proprio turno fa
+  riascoltare la battuta d'attacco.
+
+**Cosa non può fare.** Le voci di sistema non hanno controlli di emozione, enfasi o
+intenzione: l'app regola solo pause, velocità e (dove supportata) intonazione. La prosodia
+dentro ogni frase dipende interamente dalla voce installata. Ogni frase è un enunciato
+separato, quindi alla pausa voluta si somma la latenza di avvio del motore, che varia da
+dispositivo a dispositivo: il cursore del ritmo serve anche a compensarla.
+
 ### Installare voci locali
 
 - **macOS**: Impostazioni di Sistema → Accessibilità → Contenuti letti → Voce di sistema →
@@ -81,9 +106,12 @@ L'app usa la Web Speech API del browser, cioè le voci già presenti nel sistema
   - Safari può cancellare i dati dei siti non usati per 7 giorni: **installa l'app nella
     schermata Home** (Condividi → Aggiungi alla schermata Home) per proteggerli, ed esporta
     periodicamente un backup;
-  - in rari casi Safari non segnala la fine di una frase: un timer di sicurezza fa proseguire la lettura.
+  - in rari casi Safari non segnala la fine di una frase: un timer di sicurezza fa proseguire la lettura;
+  - le frasi successive alla prima partono da un timer: la sintesi viene “sbloccata” al primo
+    tocco su Avvia/Continua; se iOS la blocca comunque, l'app va in pausa e lo segnala.
 - **Chrome / Edge**: le voci vengono caricate in modo asincrono; i testi lunghi vengono divisi
-  in frasi per evitare interruzioni note del motore di sintesi.
+  in frasi per evitare interruzioni note del motore di sintesi; dopo un annullamento la frase
+  successiva parte con un ritardo minimo (80 ms) per evitare che venga scartata.
 - **Firefox**: non supporta l'installazione come PWA su desktop; l'app funziona comunque nel browser.
 
 ## Formati di copione riconosciuti
@@ -109,7 +137,11 @@ Vengono inoltre distinti:
 - il **frontespizio**: titolo (riconosciuto dalla dimensione del carattere), autore, crediti;
 - l'**elenco dei personaggi** (dopo “PERSONAGGI”, “INTERPRETI”, ecc.), i cui nomi aiutano il riconoscimento;
 - **atti e scene** (`ATTO I`, `SCENA SECONDA`, `PRIMO TEMPO`, `PROLOGO`…);
-- **didascalie** tra parentesi (anche su più righe) o interamente in corsivo;
+- **didascalie** tra parentesi (anche su più righe) o interamente in corsivo; dentro una
+  didascalia aperta, un nome in maiuscolo non viene scambiato per una nuova battuta;
+- **didascalie interne**: quelle brevi (“(ride)”, “(chiama)”) restano nella battuta, visibili
+  ma non lette; quelle lunghe (oltre 8 parole) o non chiuse diventano didascalie autonome
+  nella stessa posizione, senza perdere testo;
 - **battute su più righe e su più pagine**, parole spezzate dal trattino;
 - **intestazioni e piè di pagina ripetuti** e numeri di pagina, che vengono rimossi;
 - **battute corali** (`TUTTI`, `VERA E GINO`), indicazioni “fuori scena” e “insieme”.
@@ -154,7 +186,8 @@ src/
   parser/      righe dal layout del PDF → personaggi, battute, didascalie, scene (funzioni pure)
   pdf/         lettura locale con PDF.js e ricostruzione delle righe
   script/      correzioni manuali del copione
-  rehearsal/   piano di prova e motore di riproduzione (indipendente dal browser)
+  pacing/      regia vocale: frasi, pause, ritmo (funzioni pure)
+  rehearsal/   piano di prova, regista e motore di riproduzione (indipendenti dal browser)
   speech/      voci di sistema, privacy rigorosa, Web Speech API
   db/          IndexedDB: copioni, impostazioni, backup, eliminazione
   ui/          interfaccia React
