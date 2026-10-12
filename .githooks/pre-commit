@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocca commit che contengono PDF, copioni o documenti riservati.
+node scripts/check-sensitive.mjs || exit 1

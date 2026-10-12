@@ -1,0 +1,42 @@
+# Dipendenze e build
+node_modules/
+dist/
+dev-dist/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Ambiente e credenziali
+.env
+.env.*
+*.pem
+*.key
+
+# ---------------------------------------------------------------
+# PROTEZIONE COPIONI: nessun documento teatrale nel repository.
+# I copioni appartengono agli attori e restano sui loro dispositivi.
+# ---------------------------------------------------------------
+*.pdf
+*.PDF
+*.doc
+*.docx
+*.odt
+*.rtf
+*.pages
+*.epub
+*.fdx
+*.fountain
+*.celtx
+*.txt
+*.md.bak
+# Backup esportati dall'app (contengono il testo dei copioni)
+si-va-in-scena-backup*.json
+copioni/
+scripts-privati/

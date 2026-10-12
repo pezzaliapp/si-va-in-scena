@@ -1,0 +1,67 @@
+/** Identificatore speciale per le battute corali ("TUTTI"): include ogni personaggio. */
+export const EVERYONE = '*';
+
+export type BlockKind = 'speech' | 'direction' | 'heading';
+
+export interface Block {
+  id: string;
+  kind: BlockKind;
+  /** Id dei personaggi che pronunciano la battuta (vuoto per didascalie e intestazioni). */
+  speakers: string[];
+  text: string;
+  /** Indicazione tra parentesi accanto al nome, es. "sottovoce". */
+  note?: string;
+  offstage?: boolean;
+  /** Per le intestazioni: 1 = atto/parte, 2 = scena. */
+  level?: 1 | 2;
+  simultaneous?: boolean;
+  /** Motivo per cui l'attribuzione è incerta e va verificata dall'attore. */
+  ambiguous?: string;
+  page: number;
+}
+
+export interface Character {
+  id: string;
+  name: string;
+}
+
+export interface Script {
+  id: string;
+  title: string;
+  fileName: string;
+  importedAt: number;
+  updatedAt: number;
+  characters: Character[];
+  blocks: Block[];
+  warnings: string[];
+}
+
+export interface VoiceSetting {
+  voiceURI: string | null;
+  rate: number;
+  pitch: number;
+}
+
+export type Mode = 'rehearsal' | 'memorize' | 'full';
+
+export interface ScriptSettings {
+  scriptId: string;
+  role: string | null;
+  voices: Record<string, VoiceSetting>;
+  /** Indice del blocco su cui si trova la lettura. */
+  position: number;
+  mode: Mode;
+  /** Id del blocco intestazione della scena selezionata; null = copione intero. */
+  sceneId: string | null;
+}
+
+export interface GlobalPrefs {
+  /** Se attivo, usa solo voci dichiarate locali dal sistema (nessuna elaborazione remota). */
+  strictPrivacy: boolean;
+}
+
+export const DEFAULT_PREFS: GlobalPrefs = { strictPrivacy: true };
+
+export function defaultSettings(scriptId: string): ScriptSettings {
+  return { scriptId, role: null, voices: {}, position: 0, mode: 'rehearsal', sceneId: null };
+}
