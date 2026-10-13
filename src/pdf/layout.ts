@@ -15,6 +15,8 @@ export interface PdfPageLike {
     convertToViewportPoint(x: number, y: number): number[];
   };
   getTextContent(): Promise<{ items: unknown[] }>;
+  /** Flusso del testo della pagina (PDF.js); se presente si usa al posto di getTextContent. */
+  streamTextContent?(): ReadableStream<{ items: unknown[] }>;
   /** Carica i font della pagina: serve a conoscerne il nome (grassetto/corsivo). */
   getOperatorList?(): Promise<unknown>;
   commonObjs?: { get(id: string): unknown };
@@ -56,6 +58,22 @@ function isTextItem(item: unknown): item is PdfTextItem {
 const BOLD = /bold|black|heavy|semibold|demibold|grassetto|-bd\b|,b\b/i;
 const ITALIC = /italic|oblique|corsivo|-it\b|,i\b/i;
 
+/**
+ * Testo di una pagina. getTextContent() di PDF.js scorre il flusso con
+ * `for await`, che Safari non supporta sui ReadableStream: lo si legge
+ * quindi con getReader(), disponibile in tutti i browser.
+ */
+async function readTextContent(page: PdfPageLike): Promise<unknown[]> {
+  if (!page.streamTextContent) return (await page.getTextContent()).items;
+  const reader = page.streamTextContent().getReader();
+  const items: unknown[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return items;
+    items.push(...value.items);
+  }
+}
+
 /** Stile del font dedotto dal suo nome (es. "ABCDEF+TimesNewRomanPS-BoldItalicMT"). */
 async function fontStyles(page: PdfPageLike, names: Set<string>): Promise<Map<string, FontStyle> | null> {
   if (!page.getOperatorList || !page.commonObjs) return null;
@@ -90,8 +108,7 @@ export async function extractLines(doc: PdfDocLike, onProgress?: (page: number) 
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const viewport = page.getViewport({ scale: 1 });
-    const content = await page.getTextContent();
-    const textItems = content.items.filter(isTextItem);
+    const textItems = (await readTextContent(page)).filter(isTextItem);
     const styles = await fontStyles(page, new Set(textItems.map((i) => i.fontName ?? '').filter(Boolean)));
     if (styles) stylesKnown = true;
 

@@ -181,3 +181,20 @@ describe.each<Layout>(['column', 'centered', 'bold', 'uppercaseSpace', 'mixedCol
     });
   },
 );
+
+describe('browser senza iterazione asincrona dei ReadableStream (Safari)', () => {
+  it('estrae lo stesso copione', async () => {
+    const data = await buildPdf('column', makeScript());
+    const expected = await analyse(data.slice());
+    const proto = ReadableStream.prototype as unknown as Record<symbol, unknown>;
+    const original = proto[Symbol.asyncIterator];
+    delete proto[Symbol.asyncIterator];
+    try {
+      const s = await analyse(data.slice());
+      expect(s.blocks).toEqual(expected.blocks);
+      expect(s.characters).toEqual(expected.characters);
+    } finally {
+      proto[Symbol.asyncIterator] = original;
+    }
+  });
+});
