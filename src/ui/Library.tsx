@@ -14,6 +14,8 @@ interface Props {
   onOpen(id: string, fresh: boolean): void;
 }
 
+const FEEDBACK_URL = 'https://github.com/pezzaliapp/si-va-in-scena/issues/new?template=feedback.yml';
+
 const dateFmt = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' });
 
 export default function Library({ onOpen }: Props) {
@@ -91,7 +93,9 @@ export default function Library({ onOpen }: Props) {
   return (
     <main className="page">
       <header className="masthead">
-        <h1 className="brand">SI VA IN SCENA</h1>
+        <h1 className="brand">
+          SI VA IN SCENA <span className="beta-badge">Beta</span>
+        </h1>
         <p className="tagline">Il tuo copione. La tua parte. Si va in scena.</p>
       </header>
 
@@ -149,6 +153,22 @@ export default function Library({ onOpen }: Props) {
             ))}
           </ul>
         )}
+      </section>
+
+      <section className="panel subtle">
+        <h2>Versione beta</h2>
+        <p className="hint">
+          L'app è in prova. Il riconoscimento dei copioni PDF non è perfetto: controlla sempre personaggi e battute
+          nella scheda Verifica e correggi ciò che serve. Le voci sono quelle del tuo dispositivo: pause e ritmo sono
+          regolabili, ma l'espressività dipende dalla voce installata.
+        </p>
+        <p className="hint">
+          <a href={FEEDBACK_URL} target="_blank" rel="noopener noreferrer">
+            Segnala un problema o lascia un suggerimento
+          </a>{' '}
+          (GitHub, richiede un account gratuito). Non allegare il PDF né parti del copione: descrivi il problema con
+          parole tue.
+        </p>
       </section>
 
       <section className="panel subtle">

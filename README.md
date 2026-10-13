@@ -8,6 +8,12 @@ lette da voci sintetiche; quando arriva il suo turno la lettura si ferma e atten
 
 Autore: **Alessandro Pezzali** · Licenza: [MIT](LICENSE)
 
+> **Versione beta.** Il riconoscimento dei copioni PDF va sempre controllato nella scheda
+> *Verifica*, dove personaggi e battute si correggono a mano. Le voci sono quelle del sistema:
+> pause e ritmo sono regolabili, l'espressività dipende dalla voce installata.
+> Segnalazioni e suggerimenti: [GitHub Issues](https://github.com/pezzaliapp/si-va-in-scena/issues/new?template=feedback.yml)
+> — **non allegare PDF e non incollare testo dei copioni**, descrivi il problema con parole tue.
+
 ---
 
 ## Principi
@@ -193,6 +199,28 @@ src/
   ui/          interfaccia React
 scripts/       controllo anti-documenti riservati, diagnostica PDF mascherata, generazione icone
 ```
+
+### Pubblicazione (Cloudflare Pages, piano gratuito)
+
+Sito statico, nessuna funzione lato server. Configurazione del progetto Pages collegato al
+repository GitHub:
+
+| Impostazione | Valore |
+| --- | --- |
+| Framework preset | Vite |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Production branch | `main` |
+| Versione di Node | da `.node-version` (22) |
+
+`public/_headers` imposta la Content Security Policy come intestazione HTTP, impedisce la
+cache del service worker e rende permanente quella dei file con hash. Nessun Worker, nessuna
+variabile d'ambiente, nessun servizio aggiuntivo.
+
+**Aggiornamenti.** Una nuova versione viene scaricata in background e si attiva solo quando
+l'utente tocca *Aggiorna* (o alla successiva apertura dell'app), così una prova in corso non
+viene interrotta. Copioni e impostazioni restano in IndexedDB e non sono toccati dagli
+aggiornamenti; se in futuro lo schema dei dati cambiasse, la migrazione dovrà conservarli.
 
 ### Protezione dei copioni nel repository
 

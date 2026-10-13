@@ -1,0 +1,51 @@
+name: Segnalazione o suggerimento (beta)
+description: Racconta cosa non ha funzionato o cosa miglioreresti.
+labels: ["beta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Grazie per provare SI VA IN SCENA.
+
+        **Non allegare il PDF del copione e non incollare battute o didascalie**: i copioni sono
+        protetti dal diritto d'autore e questa pagina è pubblica. Descrivi il problema con parole
+        tue (ad esempio "il nome del personaggio è in colonna a sinistra e la battuta a destra").
+  - type: dropdown
+    id: area
+    attributes:
+      label: Di cosa si tratta?
+      options:
+        - Riconoscimento del copione (personaggi, battute, didascalie)
+        - Voci e ritmo della lettura
+        - Prova, studio o memorizzazione
+        - Installazione, aggiornamento o dati salvati
+        - Altro
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Cosa è successo e cosa ti aspettavi
+      description: Senza testo del copione.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Dispositivo e browser
+      placeholder: "es. iPhone 13, iOS 18, Safari — oppure Mac, Chrome"
+  - type: textarea
+    id: layout
+    attributes:
+      label: Com'è impaginato il copione (se riguarda il riconoscimento)
+      description: >
+        Ad esempio: nome seguito da due punti, nome su una riga da solo, nome in grassetto,
+        didascalie in corsivo o tra parentesi. Puoi anche copiare i numeri della sezione
+        "Dati di lettura del PDF" nella scheda Verifica: contiene solo conteggi, nessun testo.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Riservatezza
+      options:
+        - label: Non ho allegato il PDF né incollato testo del copione.
+          required: true

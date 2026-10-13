@@ -759,3 +759,29 @@ section + section {
   color: var(--ink-2);
   font-style: italic;
 }
+
+/* ------------------------------------------------------------ beta e aggiornamenti */
+.beta-badge {
+  display: inline-block;
+  vertical-align: middle;
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.update-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 0.95rem;
+}
