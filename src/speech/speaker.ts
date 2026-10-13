@@ -2,6 +2,8 @@ import type { SpeakOptions, Speaker } from '../rehearsal/engine';
 
 /** Ritardo dopo cancel(): Chrome può scartare un enunciato avviato subito dopo. */
 const AFTER_CANCEL_MS = 80;
+/** Attesa massima della fine dell'enunciato di sblocco. */
+const PRIME_TIMEOUT_MS = 1000;
 
 /** Implementazione di Speaker basata sulla Web Speech API del browser. */
 export class WebSpeechSpeaker implements Speaker {
@@ -9,6 +11,8 @@ export class WebSpeechSpeaker implements Speaker {
   private current: { utterance: SpeechSynthesisUtterance; finish: (r: 'end' | 'cancelled') => void } | null = null;
   private lastCancel = 0;
   private primed = false;
+  /** Enunciato di sblocco in corso: non va annullato. */
+  private priming: Promise<void> | null = null;
   /** Cresce a ogni cancel(): una frase in attesa di partire viene scartata. */
   private generation = 0;
 
@@ -21,18 +25,36 @@ export class WebSpeechSpeaker implements Speaker {
    * Da chiamare dentro un gesto dell'utente (tocco, clic): su iOS la sintesi
    * vocale si sblocca solo così, e le frasi successive avviate da un timer
    * possono essere pronunciate.
+   *
+   * L'enunciato di sblocco non viene mai annullato: in Chrome su macOS
+   * annullarlo prima che inizi blocca la sintesi vocale per tutta la pagina.
+   * Le frasi successive attendono che sia terminato.
    */
   prime(): void {
     if (this.primed) return;
     this.primed = true;
-    const synth = window.speechSynthesis;
     const u = new SpeechSynthesisUtterance(' ');
     u.volume = 0;
-    synth.speak(u);
+    this.priming = new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.priming = null;
+        resolve();
+      };
+      const timer = setTimeout(done, PRIME_TIMEOUT_MS);
+      u.onend = done;
+      u.onerror = done;
+    });
+    window.speechSynthesis.speak(u);
   }
 
   async speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancelled'> {
     const synth = window.speechSynthesis;
+    if (this.priming) {
+      const gen = this.generation;
+      await this.priming;
+      if (gen !== this.generation) return 'cancelled';
+    }
     if (synth.speaking || synth.pending) {
       synth.cancel();
       this.lastCancel = Date.now();
@@ -83,7 +105,8 @@ export class WebSpeechSpeaker implements Speaker {
     const c = this.current;
     this.current = null;
     const synth = window.speechSynthesis;
-    if (c || synth.speaking || synth.pending) {
+    // Durante lo sblocco non c'è altro da annullare: lo si lascia terminare.
+    if (c || (!this.priming && (synth.speaking || synth.pending))) {
       synth.cancel();
       this.lastCancel = Date.now();
     }
