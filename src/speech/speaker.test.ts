@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WebSpeechSpeaker } from './speaker';
+import { buildReport, speechEvents } from './diagnostics';
+import { START_TIMEOUT_MS, WebSpeechSpeaker } from './speaker';
 
 const OPTS = { voiceURI: null, rate: 1, pitch: 1 };
 
@@ -121,5 +122,64 @@ describe('WebSpeechSpeaker', () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(await result).toBe('end');
     expect(synth.started).toEqual(['Battuta']);
+  });
+});
+
+describe('avvio della voce', () => {
+  it('con la sintesi bloccata il risultato è "non avviata", non una falsa fine', async () => {
+    synth.wedged = true;
+    const speaker = new WebSpeechSpeaker(() => []);
+    const onStart = vi.fn();
+    const result = speaker.speak('Battuta segreta del copione', OPTS, onStart);
+    await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS + 60000);
+    expect(await result).toBe('stalled');
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
+  it('onStart viene chiamato solo all\'avvio effettivo', async () => {
+    const speaker = new WebSpeechSpeaker(() => []);
+    const onStart = vi.fn();
+    const result = speaker.speak('Battuta', OPTS, onStart);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onStart).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toBe('end');
+  });
+
+  it('se la voce parte dopo il timeout viene fermata', async () => {
+    const speaker = new WebSpeechSpeaker(() => []);
+    synth.wedged = true;
+    const result = speaker.speak('Battuta', OPTS);
+    await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS + 10);
+    expect(await result).toBe('stalled');
+    const cancel = vi.spyOn(synth, 'cancel');
+    synth.wedged = false;
+    synth.queue[0]!.onstart?.();
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it('il rapporto diagnostico registra gli eventi senza il testo delle battute', async () => {
+    synth.wedged = true;
+    const speaker = new WebSpeechSpeaker(() => []);
+    const result = speaker.speak('Battuta segreta del copione', OPTS);
+    await vi.advanceTimersByTimeAsync(START_TIMEOUT_MS + 10);
+    await result;
+    const report = buildReport({
+      appVersion: 'test',
+      browser: 'test',
+      serviceWorker: 'test',
+      strictPrivacy: true,
+      lang: 'it-IT',
+      voices: [],
+      events: speechEvents(),
+      importFailure: null,
+      synth: 'test',
+    });
+    expect(report).toContain('richiesta');
+    expect(report).toContain('caratteri=27');
+    expect(report).toContain('timeout-avvio');
+    expect(report).not.toContain('segreta');
   });
 });

@@ -5,7 +5,7 @@ import { DEFAULT_PACING, type PacingSettings } from '../pacing/pacing';
 import { linesFromText } from '../parser/lines';
 import { parseScript } from '../parser/parse';
 import { createDirector } from './director';
-import { RehearsalEngine, type EngineState, type Speaker, type Timer } from './engine';
+import { RehearsalEngine, type EngineState, type SpeakResult, type Speaker, type Timer } from './engine';
 import { buildPlan, nextActorIndex, sceneRange } from './plan';
 
 const SCRIPT = parseScript(
@@ -33,19 +33,34 @@ async function settle(n = 40) {
   for (let i = 0; i < n; i++) await flush();
 }
 
-/** Sintesi finta: in modalità automatica ogni frase termina subito; altrimenti a comando. */
+/**
+ * Sintesi finta: in modalità automatica ogni frase termina subito; altrimenti a comando.
+ * L'audio "parte" subito (onStart), salvo `nextResult`, che simula una voce
+ * che non parte ('stalled') o un errore ('error').
+ */
 class FakeSpeaker implements Speaker {
   log: { text: string; voice: string | null }[] = [];
-  private pending: ((r: 'end' | 'cancelled') => void) | null = null;
+  private pending: ((r: SpeakResult) => void) | null = null;
   failNext = false;
+  nextResult: 'stalled' | 'error' | null = null;
+  /** Se vero, l'avvio dell'audio va confermato a mano con start(). */
+  holdStart = false;
+  private onStart: (() => void) | undefined;
   constructor(public auto = false) {}
-  speak(text: string, opts: { voiceURI: string | null }) {
+  speak(text: string, opts: { voiceURI: string | null }, onStart?: () => void) {
     this.log.push({ text, voice: opts.voiceURI });
     if (this.failNext) {
       this.failNext = false;
       return Promise.resolve('cancelled' as const);
     }
-    return new Promise<'end' | 'cancelled'>((resolve) => {
+    if (this.nextResult) {
+      const r = this.nextResult;
+      this.nextResult = null;
+      return Promise.resolve(r);
+    }
+    if (this.holdStart) this.onStart = onStart;
+    else onStart?.();
+    return new Promise<SpeakResult>((resolve) => {
       this.pending = resolve;
       if (this.auto) setTimeout(() => this.finish(), 0);
     });
@@ -53,6 +68,10 @@ class FakeSpeaker implements Speaker {
   cancel() {
     this.pending?.('cancelled');
     this.pending = null;
+  }
+  start() {
+    this.onStart?.();
+    this.onStart = undefined;
   }
   finish() {
     const p = this.pending;
@@ -364,5 +383,65 @@ EMO: Resto.
     }
     // La descrizione iniziale della scena è una didascalia, letta solo su richiesta.
     expect(buildPlan(s, null, 'full', null, true).some((p) => s.blocks[p.blockIndex]!.text === 'Una veranda. Mattina.')).toBe(true);
+  });
+});
+
+describe('avvio reale della voce', () => {
+  it('"sta parlando" solo dopo la conferma dell\'avvio dell\'audio', async () => {
+    const { engine, speaker, states } = setup(id('FELICE'), { auto: false });
+    speaker.holdStart = true;
+    engine.start();
+    await settle();
+    expect(states.at(-1)).toMatchObject({ status: 'starting', index: 0, part: null });
+    speaker.start();
+    expect(states.at(-1)).toMatchObject({ status: 'speaking', index: 0, part: 0 });
+  });
+
+  it('se la voce non parte: errore, nessun avanzamento e nessun nuovo tentativo automatico', async () => {
+    const { engine, speaker, states, said } = setup(id('FELICE'));
+    speaker.nextResult = 'stalled';
+    engine.start();
+    await settle();
+    expect(states.at(-1)).toMatchObject({ status: 'failed', failure: 'timeout', index: 0 });
+    expect(said()).toEqual(['Chi ha preso le chiavi?']);
+    expect(states.some((s) => s.status === 'speaking')).toBe(false);
+    expect(states.some((s) => s.status === 'waiting')).toBe(false);
+    await settle(200);
+    expect(said()).toHaveLength(1);
+    expect(states.at(-1)).toMatchObject({ status: 'failed', index: 0 });
+  });
+
+  it('Riprova ripete la stessa frase una sola volta, poi la prova prosegue', async () => {
+    const { engine, speaker, states, said } = setup(id('FELICE'));
+    speaker.nextResult = 'stalled';
+    engine.start();
+    await settle();
+    engine.continue();
+    await settle();
+    expect(said()).toEqual(['Chi ha preso le chiavi?', 'Chi ha preso le chiavi?']);
+    expect(states.at(-1)).toMatchObject({ status: 'waiting', index: 1 });
+  });
+
+  it('un errore della sintesi ferma la prova sulla stessa frase', async () => {
+    const { engine, speaker, states, said } = setup(id('IRIS'));
+    speaker.nextResult = 'error';
+    engine.goTo(1, true);
+    await settle();
+    expect(states.at(-1)).toMatchObject({ status: 'failed', failure: 'error', index: 1 });
+    expect(said()).toEqual(['Non io.']);
+  });
+
+  it('la pausa durante l\'avvio non perde la frase', async () => {
+    const { engine, speaker, states, said } = setup(id('FELICE'), { auto: false });
+    speaker.holdStart = true;
+    engine.start();
+    await settle();
+    engine.pause();
+    expect(states.at(-1)).toMatchObject({ status: 'paused', index: 0 });
+    speaker.holdStart = false;
+    engine.continue();
+    await settle();
+    expect(said()).toEqual(['Chi ha preso le chiavi?', 'Chi ha preso le chiavi?']);
+    expect(states.at(-1)).toMatchObject({ status: 'speaking', index: 0 });
   });
 });

@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import react from '@vitejs/plugin-react';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
@@ -18,6 +19,19 @@ const CSP = [
   "form-action 'none'",
 ].join('; ');
 
+// Versione mostrata nella Diagnostica: versione del pacchetto e commit della build.
+function appVersion(): string {
+  let commit = process.env.CF_PAGES_COMMIT_SHA?.slice(0, 7);
+  if (!commit) {
+    try {
+      commit = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    } catch {
+      commit = 'locale';
+    }
+  }
+  return `${process.env.npm_package_version ?? '?'} (${commit})`;
+}
+
 function csp(): Plugin {
   return {
     name: 'si-va-in-scena-csp',
@@ -29,6 +43,9 @@ function csp(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion()),
+  },
   plugins: [
     react(),
     csp(),

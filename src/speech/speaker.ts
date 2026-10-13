@@ -1,14 +1,17 @@
-import type { SpeakOptions, Speaker } from '../rehearsal/engine';
+import type { SpeakOptions, SpeakResult, Speaker } from '../rehearsal/engine';
+import { logSpeech } from './diagnostics';
 
 /** Ritardo dopo cancel(): Chrome può scartare un enunciato avviato subito dopo. */
 const AFTER_CANCEL_MS = 80;
 /** Attesa massima della fine dell'enunciato di sblocco. */
 const PRIME_TIMEOUT_MS = 1000;
+/** Se l'evento "start" non arriva entro questo tempo, la voce non è partita: è un errore. */
+export const START_TIMEOUT_MS = 5000;
 
 /** Implementazione di Speaker basata sulla Web Speech API del browser. */
 export class WebSpeechSpeaker implements Speaker {
   /** Riferimento all'enunciazione in corso: evita che Safari la perda (e non emetta "end"). */
-  private current: { utterance: SpeechSynthesisUtterance; finish: (r: 'end' | 'cancelled') => void } | null = null;
+  private current: { utterance: SpeechSynthesisUtterance; finish: (r: SpeakResult) => void } | null = null;
   private lastCancel = 0;
   private primed = false;
   /** Enunciato di sblocco in corso: non va annullato. */
@@ -36,19 +39,27 @@ export class WebSpeechSpeaker implements Speaker {
     const u = new SpeechSynthesisUtterance(' ');
     u.volume = 0;
     this.priming = new Promise((resolve) => {
-      const done = () => {
+      const done = (kind: 'sblocco-fine' | 'sblocco-timeout') => {
+        if (!this.priming) return;
         clearTimeout(timer);
         this.priming = null;
+        logSpeech({ kind });
         resolve();
       };
-      const timer = setTimeout(done, PRIME_TIMEOUT_MS);
-      u.onend = done;
-      u.onerror = done;
+      const timer = setTimeout(() => done('sblocco-timeout'), PRIME_TIMEOUT_MS);
+      u.onend = () => done('sblocco-fine');
+      u.onerror = () => done('sblocco-fine');
     });
+    logSpeech({ kind: 'sblocco' });
     window.speechSynthesis.speak(u);
   }
 
-  async speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancelled'> {
+  /**
+   * Pronuncia una frase. `onStart` viene chiamato solo quando il browser
+   * conferma l'avvio dell'audio. Se l'avvio non arriva entro START_TIMEOUT_MS
+   * il risultato è 'stalled': la frase non viene considerata pronunciata.
+   */
+  async speak(text: string, opts: SpeakOptions, onStart?: () => void): Promise<SpeakResult> {
     const synth = window.speechSynthesis;
     if (this.priming) {
       const gen = this.generation;
@@ -72,29 +83,59 @@ export class WebSpeechSpeaker implements Speaker {
       }
       u.rate = opts.rate;
       u.pitch = opts.pitch;
+      const info = voice ? { voice: voice.name, local: voice.localService } : { voice: '(predefinita)' };
 
       let settled = false;
-      // Rete di sicurezza: alcuni browser a volte non emettono "end".
-      const watchdog = setTimeout(() => finish('end'), 6000 + (text.length * 150) / Math.max(0.5, opts.rate));
-      const finish = (r: 'end' | 'cancelled') => {
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      const startTimer = setTimeout(() => {
+        logSpeech({ kind: 'timeout-avvio', ...info });
+        finish('stalled');
+      }, START_TIMEOUT_MS);
+      const finish = (r: SpeakResult) => {
         if (settled) return;
         settled = true;
+        clearTimeout(startTimer);
         clearTimeout(watchdog);
         if (this.current?.utterance === u) this.current = null;
         resolve(r);
       };
-      u.onend = () => finish('end');
-      u.onerror = (e) => {
-        if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          this.onError?.(
-            e.error === 'not-allowed'
-              ? 'Il browser ha bloccato la voce: tocca di nuovo "Avvia" o "Continua".'
-              : `La sintesi vocale ha restituito un errore (${e.error}).`,
-          );
+      u.onstart = () => {
+        if (settled) {
+          // Partita in ritardo, quando la frase era già stata data per non avviata.
+          synth.cancel();
+          return;
         }
-        finish('cancelled');
+        clearTimeout(startTimer);
+        logSpeech({ kind: 'avvio', ...info });
+        onStart?.();
+        // Rete di sicurezza: a volte, dopo l'avvio, il browser non emette "end".
+        watchdog = setTimeout(
+          () => {
+            logSpeech({ kind: 'fine-presunta', ...info });
+            finish('end');
+          },
+          6000 + (text.length * 150) / Math.max(0.5, opts.rate),
+        );
+      };
+      u.onend = () => {
+        if (!settled) logSpeech({ kind: 'fine', ...info });
+        finish('end');
+      };
+      u.onerror = (e) => {
+        if (e.error === 'interrupted' || e.error === 'canceled') {
+          if (!settled) logSpeech({ kind: 'annullata', ...info, code: e.error });
+          return finish('cancelled');
+        }
+        logSpeech({ kind: 'errore', ...info, code: e.error });
+        this.onError?.(
+          e.error === 'not-allowed'
+            ? 'Il browser ha bloccato la voce: tocca di nuovo il pulsante.'
+            : `La sintesi vocale ha restituito un errore (${e.error}).`,
+        );
+        finish('error');
       };
       this.current = { utterance: u, finish };
+      logSpeech({ kind: 'richiesta', ...info, chars: text.length });
       synth.resume();
       synth.speak(u);
     });
@@ -110,20 +151,7 @@ export class WebSpeechSpeaker implements Speaker {
       synth.cancel();
       this.lastCancel = Date.now();
     }
+    if (c) logSpeech({ kind: 'annullata' });
     c?.finish('cancelled');
   }
-}
-
-/** Anteprima di una voce (fuori dal motore di prova). */
-export function previewVoice(voice: SpeechSynthesisVoice | undefined, text: string, rate: number, pitch: number): void {
-  const synth = window.speechSynthesis;
-  synth.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  if (voice) {
-    u.voice = voice;
-    u.lang = voice.lang;
-  }
-  u.rate = rate;
-  u.pitch = pitch;
-  synth.speak(u);
 }

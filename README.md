@@ -164,6 +164,21 @@ Non riconosciuti, o riconosciuti solo in parte (segnalati come *da verificare*):
 - nomi scritti in modi diversi nello stesso copione (es. `VERA` e `V.`): vanno uniti nella Verifica;
 - copioni in cui il nome non è distinguibile dal testo per posizione, punteggiatura, maiuscolo o grassetto.
 
+### Diagnostica della voce e dell'importazione
+
+Nella schermata principale e nella scheda **Voci** la sezione *Diagnostica* mostra versione
+dell'app, browser, stato del service worker, voci disponibili (totali, locali, locali in
+italiano), stato del sintetizzatore, gli ultimi eventi vocali (richiesta, avvio, fine, errore,
+timeout: con la sola lunghezza del testo) e l'ultimo errore di importazione. “Prova la voce”
+pronuncia una frase fissa; “Copia il rapporto” lo copia per una segnalazione. Il rapporto resta
+sul dispositivo e non contiene testo dei copioni, nomi dei personaggi o dati personali.
+
+Una battuta risulta “in lettura” solo quando il browser conferma l'avvio dell'audio. Se la voce
+non parte entro 5 secondi la prova si ferma sulla stessa frase con il messaggio “Voce non
+avviata” e il pulsante **Riprova**, senza avanzare. In Chrome su macOS il motore vocale può
+restare bloccato per l'intero browser: in quel caso serve chiudere completamente Chrome (Cmd+Q)
+e riaprirlo.
+
 ### Diagnostica locale di un PDF
 
 Se un copione non viene riconosciuto:

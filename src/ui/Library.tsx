@@ -9,8 +9,12 @@ import {
   saveScript,
   type ScriptSummary,
 } from '../db/db';
+import { logImportFailure } from '../speech/diagnostics';
+import type { GlobalPrefs } from '../types';
+import Diagnostics from './Diagnostics';
 
 interface Props {
+  prefs: GlobalPrefs;
   onOpen(id: string, fresh: boolean): void;
 }
 
@@ -37,7 +41,7 @@ function technicalDetail(err: unknown): string {
 
 const dateFmt = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' });
 
-export default function Library({ onOpen }: Props) {
+export default function Library({ prefs, onOpen }: Props) {
   const [scripts, setScripts] = useState<ScriptSummary[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +71,7 @@ export default function Library({ onOpen }: Props) {
         script = await importPdf(file, (p, total) => setBusy(`Lettura pagina ${p} di ${total}…`));
       } catch (err) {
         if (err instanceof ImportError) {
+          logImportFailure({ stage: 'lettura PDF', detail: `file non utilizzabile: ${err.message}` });
           setError(err.message);
           return;
         }
@@ -74,6 +79,7 @@ export default function Library({ onOpen }: Props) {
       }
     } catch (err) {
       console.error(err);
+      logImportFailure({ stage: 'lettura PDF', detail: technicalDetail(err) });
       setError(
         "Problema tecnico dell'app durante la lettura del PDF: il file potrebbe essere corretto. " +
           `Ricarica la pagina e riprova; se si ripete, segnalalo riportando questo dettaglio: ${technicalDetail(err)}`,
@@ -86,6 +92,7 @@ export default function Library({ onOpen }: Props) {
       await saveScript(script);
     } catch (err) {
       console.error(err);
+      logImportFailure({ stage: 'salvataggio', detail: technicalDetail(err) });
       setError(storageMessage(err));
       return;
     }
@@ -241,6 +248,8 @@ export default function Library({ onOpen }: Props) {
           }}
         />
       </section>
+
+      <Diagnostics prefs={prefs} />
 
       <footer className="footer">
         SI VA IN SCENA · © Alessandro Pezzali · Software libero con licenza MIT

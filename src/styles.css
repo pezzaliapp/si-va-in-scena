@@ -578,6 +578,12 @@ section + section {
   color: var(--accent);
   font-size: 1rem;
 }
+.stage.failed {
+  border: 2px solid var(--danger);
+}
+.stage.failed .status-label {
+  color: var(--danger);
+}
 .progress {
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
@@ -784,4 +790,24 @@ section + section {
   background: var(--surface-2);
   border-bottom: 1px solid var(--line);
   font-size: 0.95rem;
+}
+
+/* ------------------------------------------------------------ diagnostica */
+.preview-result {
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+.preview-result.bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+.diag pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
 }

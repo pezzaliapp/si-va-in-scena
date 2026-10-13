@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { lineCounts } from '../script/edit';
-import { previewVoice } from '../speech/speaker';
+import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
+import Diagnostics from './Diagnostics';
 import { spokenText } from '../script/segments';
 import {
   appLang,
@@ -25,6 +26,11 @@ interface Props {
 
 export default function Voices({ script, settings, voices, prefs, onPrefs, onChange, onDone }: Props) {
   const [shared, setShared] = useState<boolean | null>(null);
+  // Esito dell'ultima anteprima, mostrato accanto al pulsante.
+  const [result, setResult] = useState<{ id: string; text: string; bad: boolean } | null>(null);
+  const [speaker] = useState(() =>
+    speechSupported() ? new WebSpeechSpeaker(() => window.speechSynthesis.getVoices()) : null,
+  );
   const lang = appLang();
   const infos = useMemo(() => voices.map(toInfo), [voices]);
   const usable = useMemo(() => sortVoices(usableVoices(infos, prefs.strictPrivacy), lang), [infos, prefs, lang]);
@@ -57,16 +63,28 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
 
   const preview = (id: string) => {
     const resolved = resolveVoice(settings.voices[id], infos, prefs.strictPrivacy, lang);
-    if (!resolved) return;
+    if (!resolved || !speaker) return;
     const sample =
       script.blocks.map((b) => (b.speakers.includes(id) ? spokenText(b.text) : '')).find((t) => t.length > 0) ??
       'Si va in scena.';
-    previewVoice(
-      voices.find((v) => v.voiceURI === resolved.voiceURI),
-      sample.slice(0, 160),
-      resolved.rate,
-      resolved.pitch,
-    );
+    const show = (text: string, bad = false) => setResult({ id, text, bad });
+    show('Avvio della voce…');
+    void speaker
+      .speak(sample.slice(0, 160), resolved, () => show('In riproduzione'))
+      .then((r) => {
+        setResult((cur) => {
+          if (cur?.id !== id) return cur;
+          if (r === 'end') return { id, text: 'Anteprima completata', bad: false };
+          if (r === 'stalled')
+            return {
+              id,
+              text: `Nessun audio: il browser non ha avviato la voce entro ${START_TIMEOUT_MS / 1000} secondi. Se si ripete, chiudi completamente il browser e riaprilo (vedi Diagnostica).`,
+              bad: true,
+            };
+          if (r === 'error') return { id, text: 'Errore della sintesi vocale (vedi Diagnostica).', bad: true };
+          return null;
+        });
+      });
   };
 
   return (
@@ -160,6 +178,11 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
                 <button className="btn" onClick={() => preview(c.id)} disabled={usable.length === 0}>
                   Ascolta anteprima
                 </button>
+                {result?.id === c.id && (
+                  <p className={`preview-result${result.bad ? ' bad' : ''}`} role="status">
+                    {result.text}
+                  </p>
+                )}
               </li>
             );
           })}
@@ -187,6 +210,8 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
         </div>
         <p className="hint">L’intonazione non è supportata da tutte le voci: su alcuni sistemi non ha effetto.</p>
       </section>
+
+      <Diagnostics prefs={prefs} />
 
       <button className="btn primary large block" onClick={onDone}>
         Vai alla prova

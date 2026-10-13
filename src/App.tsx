@@ -34,7 +34,7 @@ export default function App() {
         </div>
       )}
       {view.name === 'library' ? (
-        <Library onOpen={(id, fresh) => setView({ name: 'script', id, tab: fresh ? 'review' : undefined })} />
+        <Library prefs={prefs} onOpen={(id, fresh) => setView({ name: 'script', id, tab: fresh ? 'review' : undefined })} />
       ) : (
         <ScriptView
           key={view.id}

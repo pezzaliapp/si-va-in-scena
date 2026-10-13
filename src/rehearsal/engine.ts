@@ -7,9 +7,16 @@ export interface SpeakOptions {
   pitch: number;
 }
 
+/**
+ * Esito di una frase: 'end' pronunciata; 'cancelled' annullata; 'stalled' la
+ * voce non è partita entro il tempo massimo; 'error' errore della sintesi.
+ */
+export type SpeakResult = 'end' | 'cancelled' | 'stalled' | 'error';
+
 /** Astrazione della sintesi vocale: permette di provare il motore senza browser. */
 export interface Speaker {
-  speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancelled'>;
+  /** `onStart` va chiamato solo quando l'audio è effettivamente partito. */
+  speak(text: string, opts: SpeakOptions, onStart?: () => void): Promise<SpeakResult>;
   cancel(): void;
 }
 
@@ -40,10 +47,16 @@ export const realTimer = (): Timer => {
   };
 };
 
-export type Status = 'idle' | 'speaking' | 'paused' | 'waiting' | 'finished';
+/**
+ * 'starting': frase richiesta, audio non ancora confermato; 'speaking': audio
+ * partito; 'failed': la voce non è partita o ha dato errore (vedi `failure`).
+ */
+export type Status = 'idle' | 'starting' | 'speaking' | 'paused' | 'waiting' | 'failed' | 'finished';
 
 export interface EngineState {
   status: Status;
+  /** Motivo dello stato 'failed'. */
+  failure: 'timeout' | 'error' | null;
   /** Posizione nel piano di prova. */
   index: number;
   /** Parte della battuta corrente in lettura (indice in performBlock), se nota. */
@@ -66,6 +79,7 @@ export interface EngineDeps {
  */
 export class RehearsalEngine {
   private status: Status = 'idle';
+  private failure: EngineState['failure'] = null;
   private index = 0;
   private part: number | null = null;
   private steps: Step[] | null = null;
@@ -78,7 +92,7 @@ export class RehearsalEngine {
   ) {}
 
   get state(): EngineState {
-    return { status: this.status, index: this.index, part: this.part };
+    return { status: this.status, failure: this.failure, index: this.index, part: this.part };
   }
 
   /** Avvia la lettura dalla posizione corrente (dall'inizio se il copione è finito). */
@@ -91,14 +105,17 @@ export class RehearsalEngine {
   }
 
   pause(): void {
-    if (this.status !== 'speaking') return;
+    if (this.status !== 'speaking' && this.status !== 'starting') return;
     this.interrupt();
     this.set('paused');
   }
 
-  /** Riprende dopo una pausa, oppure passa oltre la battuta dell'attore. */
+  /**
+   * Riprende dopo una pausa, riprova la frase che non è partita, oppure passa
+   * oltre la battuta dell'attore.
+   */
   continue(): void {
-    if (this.status === 'paused') {
+    if (this.status === 'paused' || this.status === 'failed') {
       // Una pausa di regia interrotta non va ripetuta: si riprende dalla frase.
       if (this.steps?.[this.step]?.type === 'pause') this.step++;
       return void this.loop('user');
@@ -155,7 +172,7 @@ export class RehearsalEngine {
   }
 
   private isRunning(): boolean {
-    return this.status === 'speaking' || this.status === 'waiting';
+    return this.status === 'speaking' || this.status === 'starting' || this.status === 'waiting';
   }
 
   private interrupt(): void {
@@ -164,8 +181,9 @@ export class RehearsalEngine {
     this.deps.timer.cancel();
   }
 
-  private set(status: Status): void {
+  private set(status: Status, failure: EngineState['failure'] = null): void {
     this.status = status;
+    this.failure = failure;
     this.deps.onChange(this.state);
   }
 
@@ -178,19 +196,26 @@ export class RehearsalEngine {
         return this.set('waiting');
       }
       this.steps ??= this.deps.stepsOf(this.index, arrival);
-      this.set('speaking');
+      // "Sta parlando" solo dopo la conferma dell'avvio dell'audio.
+      this.set('starting');
       while (this.step < this.steps.length) {
         const s = this.steps[this.step]!;
-        let result: 'end' | 'cancelled';
+        let result: SpeakResult;
         if (s.type === 'pause') {
           result = await this.deps.timer.wait(s.ms);
         } else {
-          this.part = s.part;
-          this.deps.onChange(this.state);
-          result = await this.deps.speaker.speak(s.text, this.deps.voiceOf(this.index, s));
+          if (this.status !== 'speaking') this.set('starting');
+          result = await this.deps.speaker.speak(s.text, this.deps.voiceOf(this.index, s), () => {
+            if (run !== this.run) return;
+            this.part = s.part;
+            this.set('speaking');
+          });
         }
         if (run !== this.run) return;
-        // Annullamento non richiesto (errore della sintesi): ci si ferma senza perdere il punto.
+        // La frase non è stata pronunciata: ci si ferma sulla stessa frase, senza avanzare.
+        if (result === 'stalled') return this.set('failed', 'timeout');
+        if (result === 'error') return this.set('failed', 'error');
+        // Annullamento non richiesto: ci si ferma senza perdere il punto.
         if (result === 'cancelled') return this.set('paused');
         this.step++;
       }

@@ -4,7 +4,7 @@ import { createDirector, type Director } from '../rehearsal/director';
 import { RehearsalEngine, realTimer, type EngineState } from '../rehearsal/engine';
 import { buildPlan, nextActorIndex } from '../rehearsal/plan';
 import { speakerLabel } from '../script/edit';
-import { WebSpeechSpeaker } from '../speech/speaker';
+import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
 import { appLang, resolveVoice, speechSupported, toInfo } from '../speech/voices';
 import type { GlobalPrefs, Mode, Script, ScriptSettings } from '../types';
 
@@ -32,7 +32,7 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
     () => buildPlan(script, role, mode, sceneId, readDirections),
     [script, role, mode, sceneId, readDirections],
   );
-  const [state, setState] = useState<EngineState>({ status: 'idle', index: 0, part: null });
+  const [state, setState] = useState<EngineState>({ status: 'idle', failure: null, index: 0, part: null });
   const [revealedIndex, setRevealedIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<RehearsalEngine | null>(null);
@@ -100,7 +100,7 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
       speakerRef.current?.prime();
       if (e.key === ' ') {
         e.preventDefault();
-        if (engine.state.status === 'speaking') engine.pause();
+        if (engine.state.status === 'speaking' || engine.state.status === 'starting') engine.pause();
         else engine.continue();
       } else if (e.key === 'ArrowRight') engine.next();
       else if (e.key === 'ArrowLeft') engine.previous();
@@ -130,8 +130,12 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
 
   const statusText = (() => {
     switch (state.status) {
+      case 'starting':
+        return item?.narrator ? 'Avvio della voce narrante…' : `Avvio della voce: ${speakerName}…`;
       case 'speaking':
         return item?.narrator ? 'Lettura della didascalia' : `Sta parlando: ${speakerName}`;
+      case 'failed':
+        return state.failure === 'timeout' ? 'Voce non avviata' : 'Errore della voce';
       case 'waiting':
         return `Tocca a te${roleName ? ` — ${roleName}` : ''}. Recita, poi premi Continua.`;
       case 'paused':
@@ -251,6 +255,14 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
           {error}
         </p>
       )}
+      {state.status === 'failed' && state.failure === 'timeout' && (
+        <p className="alert" role="alert">
+          Il browser non ha avviato la voce entro {START_TIMEOUT_MS / 1000} secondi: la battuta non è stata letta e la
+          prova è ferma su questa frase. Premi «Riprova». Se si ripete, chiudi completamente il browser (su Mac: Cmd+Q)
+          e riaprilo: a volte il motore vocale resta bloccato finché il browser non viene riavviato. I dettagli sono
+          nella sezione Diagnostica della scheda Voci.
+        </p>
+      )}
 
       <section className={`stage ${state.status}`} aria-live="polite">
         <div className="stage-status">
@@ -322,9 +334,13 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
       )}
 
       <section className="controls" aria-label="Comandi della prova">
-        {state.status === 'speaking' ? (
+        {state.status === 'speaking' || state.status === 'starting' ? (
           <button className="btn large" onClick={() => act((e) => e.pause())}>
             Pausa
+          </button>
+        ) : state.status === 'failed' ? (
+          <button className="btn primary large" onClick={() => act((e) => e.continue())}>
+            Riprova
           </button>
         ) : state.status === 'paused' || state.status === 'waiting' ? (
           <button className="btn primary large" onClick={() => act((e) => e.continue())}>
