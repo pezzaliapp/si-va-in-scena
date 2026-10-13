@@ -16,6 +16,25 @@ interface Props {
 
 const FEEDBACK_URL = 'https://github.com/pezzaliapp/si-va-in-scena/issues/new?template=feedback.yml';
 
+const STORAGE_BLOCKED =
+  'Il browser non permette a questa app di salvare dati sul dispositivo, quindi il copione non può essere conservato. ' +
+  'Il PDF non è la causa. In Chrome: icona a sinistra dell\'indirizzo → Impostazioni sito → consenti "Cookie e dati dei siti", poi ricarica la pagina. ' +
+  'In Safari: disattiva "Blocca tutti i cookie". In navigazione privata alcuni browser non salvano i dati.';
+
+/** Messaggio per un errore di IndexedDB. */
+function storageMessage(err: unknown): string {
+  if (err instanceof DOMException && err.name === 'QuotaExceededError') {
+    return 'Spazio di archiviazione del browser esaurito: elimina qualche copione o libera spazio sul dispositivo.';
+  }
+  return `${STORAGE_BLOCKED} (Dettaglio tecnico: ${technicalDetail(err)})`;
+}
+
+/** Nome e messaggio dell'errore, senza testo del copione, da riportare in una segnalazione. */
+function technicalDetail(err: unknown): string {
+  if (err instanceof Error) return `${err.name}: ${err.message}`.slice(0, 160);
+  return String(err).slice(0, 160);
+}
+
 const dateFmt = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' });
 
 export default function Library({ onOpen }: Props) {
@@ -26,7 +45,11 @@ export default function Library({ onOpen }: Props) {
   const pdfInput = useRef<HTMLInputElement>(null);
   const backupInput = useRef<HTMLInputElement>(null);
 
-  const refresh = () => listScripts().then(setScripts);
+  const refresh = () =>
+    listScripts().then(setScripts, (err: unknown) => {
+      console.error(err);
+      setError(storageMessage(err));
+    });
   useEffect(() => {
     void refresh();
   }, []);
@@ -36,19 +59,38 @@ export default function Library({ onOpen }: Props) {
     setError(null);
     setNotice(null);
     setBusy('Lettura del copione…');
-    // PDF.js viene caricato solo quando serve.
-    const { ImportError, importPdf } = await import('../pdf/load');
+    let script;
     try {
-      const script = await importPdf(file, (p, total) => setBusy(`Lettura pagina ${p} di ${total}…`));
-      await saveScript(script);
-      void requestPersistence();
-      onOpen(script.id, true);
+      // PDF.js viene caricato solo quando serve.
+      const { ImportError, importPdf } = await import('../pdf/load');
+      try {
+        script = await importPdf(file, (p, total) => setBusy(`Lettura pagina ${p} di ${total}…`));
+      } catch (err) {
+        if (err instanceof ImportError) {
+          setError(err.message);
+          return;
+        }
+        throw err;
+      }
     } catch (err) {
-      setError(err instanceof ImportError ? err.message : 'Impossibile leggere il PDF.');
       console.error(err);
+      setError(
+        "Problema tecnico dell'app durante la lettura del PDF: il file potrebbe essere corretto. " +
+          `Ricarica la pagina e riprova; se si ripete, segnalalo riportando questo dettaglio: ${technicalDetail(err)}`,
+      );
+      return;
     } finally {
       setBusy(null);
     }
+    try {
+      await saveScript(script);
+    } catch (err) {
+      console.error(err);
+      setError(storageMessage(err));
+      return;
+    }
+    void requestPersistence();
+    onOpen(script.id, true);
   }
 
   async function onDelete(s: ScriptSummary) {
