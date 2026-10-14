@@ -39,9 +39,14 @@ export interface Block {
   page: number;
 }
 
+/** Genere di una voce o della voce desiderata per un personaggio, indicato dall'attore. */
+export type VoiceGender = 'm' | 'f';
+
 export interface Character {
   id: string;
   name: string;
+  /** Voce desiderata (maschile/femminile), indicata dall'attore; mai dedotta dal nome. */
+  voice?: VoiceGender;
 }
 
 export interface Script {
@@ -54,10 +59,16 @@ export interface Script {
   blocks: Block[];
   warnings: string[];
   stats?: ParseStats;
+  /** Personaggi per cui l'attore ha rifiutato il suggerimento di unione. */
+  dismissedMerges?: string[];
 }
 
 export interface VoiceSetting {
+  /** Identificatore della voce nel browser in cui è stata scelta. */
   voiceURI: string | null;
+  /** Nome e lingua della voce scelta: la ritrovano se l'identificatore cambia (altro browser). */
+  voiceName?: string;
+  voiceLang?: string;
   rate: number;
   pitch: number;
 }
@@ -82,9 +93,14 @@ export interface ScriptSettings {
 export interface GlobalPrefs {
   /** Se attivo, usa solo voci dichiarate locali dal sistema (nessuna elaborazione remota). */
   strictPrivacy: boolean;
+  /**
+   * Genere delle voci di questo dispositivo, indicato dall'attore dopo l'ascolto
+   * (identificatore della voce → genere). Il browser non fornisce questa informazione.
+   */
+  voiceGenders: Record<string, VoiceGender>;
 }
 
-export const DEFAULT_PREFS: GlobalPrefs = { strictPrivacy: true };
+export const DEFAULT_PREFS: GlobalPrefs = { strictPrivacy: true, voiceGenders: {} };
 
 export function defaultSettings(scriptId: string): ScriptSettings {
   return { scriptId, role: null, voices: {}, position: 0, mode: 'rehearsal', sceneId: null };

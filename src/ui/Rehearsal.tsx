@@ -3,15 +3,17 @@ import { DEFAULT_PACING, TEMPO_MAX, TEMPO_MIN, type PacingSettings } from '../pa
 import { createDirector, type Director } from '../rehearsal/director';
 import { RehearsalEngine, realTimer, type EngineState } from '../rehearsal/engine';
 import { buildPlan, nextActorIndex } from '../rehearsal/plan';
-import { speakerLabel } from '../script/edit';
+import { lineCounts, speakerLabel } from '../script/edit';
 import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
-import { appLang, resolveVoice, speechSupported, toInfo } from '../speech/voices';
+import { appLang, assignVoices, resolveVoice, speechSupported, toInfo, usableVoices } from '../speech/voices';
 import type { GlobalPrefs, Mode, Script, ScriptSettings } from '../types';
+import { setBusy } from '../update';
 
 interface Props {
   script: Script;
   settings: ScriptSettings;
   voices: SpeechSynthesisVoice[];
+  voicesReady: boolean;
   prefs: GlobalPrefs;
   onChange(patch: Partial<ScriptSettings>): void;
 }
@@ -24,7 +26,7 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
 
 const fmtSeconds = (ms: number) => `${(ms / 1000).toFixed(2).replace('.', ',')} s`;
 
-export default function Rehearsal({ script, settings, voices, prefs, onChange }: Props) {
+export default function Rehearsal({ script, settings, voices, voicesReady, prefs, onChange }: Props) {
   const { role, mode, sceneId } = settings;
   const pacing: PacingSettings = { ...DEFAULT_PACING, ...settings.pacing };
   const readDirections = pacing.readDirections;
@@ -51,21 +53,56 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
   );
 
   const infos = useMemo(() => voices.map(toInfo), [voices]);
-  const noVoice =
-    speechSupported() && voices.length > 0 && !resolveVoice(undefined, infos, prefs.strictPrivacy, appLang());
+  const noVoice = speechSupported() && voicesReady && !resolveVoice(undefined, infos, prefs.strictPrivacy, appLang());
+  // Voci scelte dall'attore che mancano su questo dispositivo: lo si dice, senza sostituirle in silenzio.
+  const counts = useMemo(() => lineCounts(script), [script]);
+  const missing = voicesReady
+    ? Object.entries(
+        assignVoices({
+          characters: script.characters,
+          role: settings.role,
+          settings: settings.voices,
+          voices: usableVoices(infos, prefs.strictPrivacy),
+          lang: appLang(),
+          genders: prefs.voiceGenders,
+          counts,
+        }).byId,
+      )
+        .filter(([, a]) => a.source === 'missing')
+        .map(([id, a]) => ({
+          name: script.characters.find((c) => c.id === id)?.name ?? '',
+          chosen: settings.voices[id]?.voiceName,
+          now: infos.find((v) => v.uri === a.voiceURI)?.name ?? 'nessuna voce',
+        }))
+    : [];
 
   useEffect(() => {
     const { settings: st } = live.current;
     const startIndex = Math.max(0, plan.findIndex((p) => p.blockIndex >= st.position));
     const speaker = speechSupported() ? new WebSpeechSpeaker(() => live.current.voices, setError) : null;
+    const counts = lineCounts(script);
     const director = createDirector(
       script,
       plan,
       () => ({ ...DEFAULT_PACING, ...live.current.settings.pacing }),
       (character, narrator) => {
         const { settings: s, voices: v, prefs: p } = live.current;
+        const infos = v.map(toInfo);
+        // Stessa assegnazione mostrata nella scheda Voci: voci diverse, scelte dell'attore rispettate.
+        if (!narrator && character) {
+          const a = assignVoices({
+            characters: script.characters,
+            role: s.role,
+            settings: s.voices,
+            voices: usableVoices(infos, p.strictPrivacy),
+            lang: appLang(),
+            genders: p.voiceGenders,
+            counts,
+          }).byId[character];
+          if (a?.voiceURI) return { voiceURI: a.voiceURI, rate: a.rate, pitch: a.pitch };
+        }
         const setting = narrator ? s.narrator : character ? s.voices[character] : undefined;
-        return resolveVoice(setting, v.map(toInfo), p.strictPrivacy, appLang()) ?? { voiceURI: null, rate: 1, pitch: 1 };
+        return resolveVoice(setting, infos, p.strictPrivacy, appLang()) ?? { voiceURI: null, rate: 1, pitch: 1 };
       },
     );
     speakerRef.current = speaker;
@@ -109,6 +146,13 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Prova in corso (anche in pausa o in attesa della battuta dell'attore): nessun aggiornamento dell'app.
+  const active = state.status !== 'idle' && state.status !== 'finished';
+  useEffect(() => {
+    setBusy('prova', active);
+    return () => setBusy('prova', false);
+  }, [active]);
 
   const setPacing = (patch: Partial<PacingSettings>) => onChange({ pacing: { ...pacing, ...patch } });
 
@@ -250,6 +294,13 @@ export default function Rehearsal({ script, settings, voices, prefs, onChange }:
           nella sezione Voci.
         </p>
       )}
+      {missing.map((m) => (
+        <p key={m.name} className="notice">
+          La voce scelta per {m.name}
+          {m.chosen ? ` (${m.chosen})` : ''} non è disponibile su questo dispositivo: per ora legge {m.now}. Puoi
+          cambiarla nella sezione Voci.
+        </p>
+      ))}
       {error && (
         <p className="alert" role="alert">
           {error}

@@ -30,6 +30,7 @@ export default function ScriptView({ scriptId, initialTab, prefs, onPrefs, onClo
   const [script, setScript] = useState<Script | null>(null);
   const [settings, setSettings] = useState<ScriptSettings | null>(null);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voicesReady, setVoicesReady] = useState(false);
   const [tab, setTab] = useState<Tab | null>(initialTab ?? null);
   const [missing, setMissing] = useState(false);
 
@@ -40,7 +41,10 @@ export default function ScriptView({ scriptId, initialTab, prefs, onPrefs, onClo
       setSettings(st);
       setTab((t) => t ?? (st.role ? 'rehearsal' : 'role'));
     });
-    void loadVoices().then(setVoices);
+    void loadVoices().then((v) => {
+      setVoices(v);
+      setVoicesReady(true);
+    });
     const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
     const onChange = () => setVoices(synth?.getVoices() ?? []);
     synth?.addEventListener('voiceschanged', onChange);
@@ -96,7 +100,15 @@ export default function ScriptView({ scriptId, initialTab, prefs, onPrefs, onClo
         ))}
       </nav>
 
-      {tab === 'review' && <Review script={script} onChange={updateScript} onDone={() => setTab('role')} />}
+      {tab === 'review' && (
+        <Review
+          script={script}
+          settings={settings}
+          onChange={updateScript}
+          onSettings={updateSettings}
+          onDone={() => setTab('role')}
+        />
+      )}
       {tab === 'role' && (
         <RoleSelect
           script={script}
@@ -112,14 +124,23 @@ export default function ScriptView({ scriptId, initialTab, prefs, onPrefs, onClo
           script={script}
           settings={settings}
           voices={voices}
+          voicesReady={voicesReady}
           prefs={prefs}
           onPrefs={onPrefs}
           onChange={updateSettings}
+          onScript={updateScript}
           onDone={() => setTab('rehearsal')}
         />
       )}
       {tab === 'rehearsal' && (
-        <Rehearsal script={script} settings={settings} voices={voices} prefs={prefs} onChange={updateSettings} />
+        <Rehearsal
+          script={script}
+          settings={settings}
+          voices={voices}
+          voicesReady={voicesReady}
+          prefs={prefs}
+          onChange={updateSettings}
+        />
       )}
       {tab === 'study' && <Study script={script} role={settings.role} onChooseRole={() => setTab('role')} />}
     </main>

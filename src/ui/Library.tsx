@@ -11,6 +11,7 @@ import {
 } from '../db/db';
 import { logImportFailure } from '../speech/diagnostics';
 import type { GlobalPrefs } from '../types';
+import { setBusy as setUpdateBusy } from '../update';
 import Diagnostics from './Diagnostics';
 
 interface Props {
@@ -58,8 +59,18 @@ export default function Library({ prefs, onOpen }: Props) {
     void refresh();
   }, []);
 
+  // Durante l'importazione un aggiornamento dell'app viene rinviato.
   async function onPdf(file: File | undefined) {
     if (!file) return;
+    setUpdateBusy('importazione', true);
+    try {
+      await importFile(file);
+    } finally {
+      setUpdateBusy('importazione', false);
+    }
+  }
+
+  async function importFile(file: File) {
     setError(null);
     setNotice(null);
     setBusy('Lettura del copione…');

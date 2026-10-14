@@ -407,6 +407,18 @@ section + section {
 .char-row .select {
   grid-column: 1;
 }
+.char-row.suspect {
+  background: var(--warn-soft);
+  border-radius: 8px;
+  padding: 8px;
+}
+.manual-merge {
+  margin: 4px 0 16px;
+}
+.manual-merge summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
 
 .blocks {
   list-style: none;

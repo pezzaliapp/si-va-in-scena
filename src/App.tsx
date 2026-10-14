@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { getPrefs, savePrefs } from './db/db';
 import { DEFAULT_PREFS, type GlobalPrefs } from './types';
-import { onUpdate } from './update';
+import { requestUpdate, setLibraryVisible, subscribeUpdate, updateState } from './update';
 import Library from './ui/Library';
 import ScriptView, { type Tab } from './ui/ScriptView';
 
@@ -10,9 +10,9 @@ type View = { name: 'library' } | { name: 'script'; id: string; tab?: Tab };
 export default function App() {
   const [view, setView] = useState<View>({ name: 'library' });
   const [prefs, setPrefs] = useState<GlobalPrefs>(DEFAULT_PREFS);
-  const [applyUpdate, setApplyUpdate] = useState<(() => void) | null>(null);
+  const update = useSyncExternalStore(subscribeUpdate, updateState);
 
-  useEffect(() => onUpdate((apply) => setApplyUpdate(() => apply)), []);
+  useEffect(() => setLibraryVisible(view.name === 'library'), [view.name]);
 
   useEffect(() => {
     void getPrefs().then(setPrefs);
@@ -25,16 +25,32 @@ export default function App() {
 
   return (
     <div className="app">
-      {applyUpdate && (
+      {update.available && (
         <div className="update-bar" role="status">
-          <span>È disponibile una nuova versione. I tuoi copioni restano dove sono.</span>
-          <button className="btn" onClick={applyUpdate}>
-            Aggiorna
-          </button>
+          {update.waitingFor ? (
+            <span>
+              Nuova versione disponibile: verrà applicata al termine{' '}
+              {update.waitingFor === 'prova' ? 'della prova' : "dell'importazione"}.
+            </span>
+          ) : (
+            <>
+              <span>Nuova versione disponibile</span>
+              <button className="btn" onClick={requestUpdate}>
+                Aggiorna ora
+              </button>
+            </>
+          )}
         </div>
       )}
       {view.name === 'library' ? (
-        <Library prefs={prefs} onOpen={(id, fresh) => setView({ name: 'script', id, tab: fresh ? 'review' : undefined })} />
+        <Library
+          prefs={prefs}
+          onOpen={(id, fresh) => {
+            // Subito, prima che termini l'importazione: l'aggiornamento non deve scattare nel passaggio.
+            setLibraryVisible(false);
+            setView({ name: 'script', id, tab: fresh ? 'review' : undefined });
+          }}
+        />
       ) : (
         <ScriptView
           key={view.id}

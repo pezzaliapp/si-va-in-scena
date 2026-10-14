@@ -1,42 +1,82 @@
 import { useMemo, useState } from 'react';
-import { lineCounts } from '../script/edit';
-import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
-import Diagnostics from './Diagnostics';
+import { lineCounts, setCharacterVoice } from '../script/edit';
 import { spokenText } from '../script/segments';
+import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
 import {
   appLang,
-  autoAssign,
-  resolveVoice,
+  assignVoices,
+  findVoice,
   sortVoices,
   speechSupported,
   toInfo,
   usableVoices,
+  voiceGender,
+  type VoiceInfo,
 } from '../speech/voices';
-import type { GlobalPrefs, Script, ScriptSettings, VoiceSetting } from '../types';
+import type { GlobalPrefs, Script, ScriptSettings, VoiceGender, VoiceSetting } from '../types';
+import Diagnostics from './Diagnostics';
 
 interface Props {
   script: Script;
   settings: ScriptSettings;
   voices: SpeechSynthesisVoice[];
+  /** L'elenco delle voci del browser è completo (vedi `loadVoices`). */
+  voicesReady: boolean;
   prefs: GlobalPrefs;
   onPrefs(p: GlobalPrefs): void;
   onChange(patch: Partial<ScriptSettings>): void;
+  onScript(s: Script): void;
   onDone(): void;
 }
 
-export default function Voices({ script, settings, voices, prefs, onPrefs, onChange, onDone }: Props) {
-  const [shared, setShared] = useState<boolean | null>(null);
+const GENDER_LABEL: Record<VoiceGender, string> = { m: 'maschile', f: 'femminile' };
+
+export default function Voices({
+  script,
+  settings,
+  voices,
+  voicesReady,
+  prefs,
+  onPrefs,
+  onChange,
+  onScript,
+  onDone,
+}: Props) {
   // Esito dell'ultima anteprima, mostrato accanto al pulsante.
   const [result, setResult] = useState<{ id: string; text: string; bad: boolean } | null>(null);
   const [speaker] = useState(() =>
     speechSupported() ? new WebSpeechSpeaker(() => window.speechSynthesis.getVoices()) : null,
   );
   const lang = appLang();
+  const prefix = lang.slice(0, 2).toLowerCase();
   const infos = useMemo(() => voices.map(toInfo), [voices]);
-  const usable = useMemo(() => sortVoices(usableVoices(infos, prefs.strictPrivacy), lang), [infos, prefs, lang]);
+  const usable = sortVoices(usableVoices(infos, prefs.strictPrivacy), lang);
   const counts = useMemo(() => lineCounts(script), [script]);
+  const genders = prefs.voiceGenders;
+  const assignment = assignVoices({
+    characters: script.characters,
+    role: settings.role,
+    settings: settings.voices,
+    voices: usable,
+    lang,
+    genders,
+    counts,
+  });
   const remoteCount = infos.filter((v) => !v.local).length;
+  const localCount = infos.filter((v) => v.local).length;
   const others = script.characters.filter((c) => c.id !== settings.role);
+  const poolIsLang = assignment.pool.some((v) => v.lang.toLowerCase().startsWith(prefix));
+  const manualCount = others.filter((c) => assignment.byId[c.id]?.source === 'manual').length;
+  const nameOf = (uri: string | null) => usable.find((v) => v.uri === uri)?.name ?? 'nessuna voce';
+  const genderOf = (uri: string | null) => {
+    const v = uri ? usable.find((x) => x.uri === uri) : undefined;
+    return v ? voiceGender(v, genders) : null;
+  };
+  const label = (v: VoiceInfo) => {
+    const g = voiceGender(v, genders);
+    const gl = g ? ` · ${GENDER_LABEL[g.gender]}${g.source === 'known' ? ' (suggerito)' : ''}` : '';
+    return `${v.name} (${v.lang})${gl}${v.local ? '' : ' · rete'}`;
+  };
 
   if (!speechSupported()) {
     return (
@@ -55,22 +95,35 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
     onChange({ voices: { ...settings.voices, [id]: { ...current, ...patch } } });
   };
 
-  const auto = () => {
-    const r = autoAssign(script.characters, settings.role, usable, lang);
-    onChange({ voices: r.voices });
-    setShared(r.shared);
+  // Si salvano anche nome e lingua: ritrovano la voce se l'identificatore cambia.
+  const chooseVoice = (id: string, uri: string) => {
+    const v = usable.find((x) => x.uri === uri);
+    setVoice(id, { voiceURI: v?.uri ?? null, voiceName: v?.name, voiceLang: v?.lang });
+  };
+
+  const setGender = (uri: string, g: VoiceGender | null) => {
+    const next = { ...genders };
+    if (g) next[uri] = g;
+    else delete next[uri];
+    onPrefs({ ...prefs, voiceGenders: next });
+  };
+
+  const resetAll = () => {
+    if (confirm('Tornare alle voci proposte automaticamente per tutti i personaggi? Le tue scelte verranno rimosse.')) {
+      onChange({ voices: {} });
+    }
   };
 
   const preview = (id: string) => {
-    const resolved = resolveVoice(settings.voices[id], infos, prefs.strictPrivacy, lang);
-    if (!resolved || !speaker) return;
+    const a = assignment.byId[id];
+    if (!a?.voiceURI || !speaker) return;
     const sample =
       script.blocks.map((b) => (b.speakers.includes(id) ? spokenText(b.text) : '')).find((t) => t.length > 0) ??
       'Si va in scena.';
     const show = (text: string, bad = false) => setResult({ id, text, bad });
     show('Avvio della voce…');
     void speaker
-      .speak(sample.slice(0, 160), resolved, () => show('In riproduzione'))
+      .speak(sample.slice(0, 160), a, () => show('In riproduzione'))
       .then((r) => {
         setResult((cur) => {
           if (cur?.id !== id) return cur;
@@ -92,9 +145,10 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
       <section className="panel">
         <h2>Voci dei personaggi</h2>
         <p className="hint">
-          Le voci sono quelle installate su questo dispositivo: {infos.length} in totale, {usable.length} utilizzabili
-          {prefs.strictPrivacy ? ' in privacy rigorosa' : ''}. Il numero e la qualità dipendono dal sistema operativo e
-          dal browser.
+          Voci {poolIsLang && prefix === 'it' ? 'italiane ' : ''}
+          {prefs.strictPrivacy ? 'locali ' : ''}utilizzabili: <strong>{assignment.pool.length}</strong> (su {localCount}{' '}
+          voci locali e {infos.length} in totale su questo dispositivo). Il numero e la qualità dipendono dal sistema
+          operativo e dal browser.
         </p>
         <label className="check strong">
           <input
@@ -117,40 +171,118 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
             (vedi la guida nel README) oppure disattivare la privacy rigorosa.
           </p>
         )}
-        <button className="btn" onClick={auto} disabled={usable.length === 0}>
-          Assegna voci automaticamente
-        </button>
-        {shared && (
+        {assignment.shared && (
           <p className="notice">
-            Le voci disponibili sono meno dei personaggi: alcune sono condivise e distinte solo dall’intonazione.
+            {assignment.pool.length} voci {poolIsLang && prefix === 'it' ? 'italiane ' : ''}per {others.length}{' '}
+            personaggi: alcune voci vengono riutilizzate con un’intonazione diversa. Le altre voci del dispositivo sono
+            in altre lingue; installando altre voci italiane nel sistema i personaggi saranno più distinguibili.
           </p>
+        )}
+        <p className="hint">
+          Ogni personaggio riceve una voce diversa, proposta automaticamente; puoi cambiarla quando vuoi. Indica per
+          ciascun personaggio se preferisci una voce maschile o femminile: l’app non lo deduce dal nome e, finché non lo
+          indichi, le voci sono solo diverse tra loro, non scelte per genere. Il browser non dice se una voce è maschile
+          o femminile: per le voci italiane di sistema più comuni l’app propone un’indicazione iniziale ricavata dal
+          nome della voce, non verificata, che puoi correggere dopo l’anteprima. Le tue scelte restano salvate su questo
+          dispositivo.
+        </p>
+        {manualCount > 0 && (
+          <button className="btn ghost" onClick={resetAll}>
+            Torna alle voci proposte ({manualCount} {manualCount === 1 ? 'scelta tua' : 'scelte tue'})
+          </button>
         )}
       </section>
 
-      <section className="panel">
+      {!voicesReady && (
+        <p className="panel hint" aria-busy="true">
+          Caricamento dell’elenco delle voci…
+        </p>
+      )}
+      <section className="panel" hidden={!voicesReady}>
         <ul className="voice-list">
           {others.map((c) => {
+            const a = assignment.byId[c.id];
             const v = settings.voices[c.id] ?? { voiceURI: null, rate: 1, pitch: 1 };
-            const selected = usable.some((u) => u.uri === v.voiceURI) ? v.voiceURI! : '';
+            const current = a?.voiceURI ?? null;
+            const vg = genderOf(current);
+            const g = vg?.gender;
             return (
               <li key={c.id} className="voice-row">
                 <div className="row spread">
                   <strong>{c.name}</strong>
-                  <span className="count">{counts.get(c.id) ?? 0} battute</span>
+                  <span className="count">
+                    {counts.get(c.id) ?? 0} {counts.get(c.id) === 1 ? 'battuta' : 'battute'}
+                  </span>
+                </div>
+                <div className="row wrap gender">
+                  <span className="hint">Voce per {c.name}:</span>
+                  {(['m', 'f'] as const).map((x) => (
+                    <button
+                      key={x}
+                      className={`btn ghost${c.voice === x ? ' active' : ''}`}
+                      aria-pressed={c.voice === x}
+                      onClick={() => onScript(setCharacterVoice(script, c.id, c.voice === x ? undefined : x))}
+                    >
+                      {GENDER_LABEL[x]}
+                    </button>
+                  ))}
+                  {!c.voice && <span className="hint">da scegliere</span>}
                 </div>
                 <select
                   className="select"
-                  value={selected}
+                  value={a?.source === 'manual' ? current! : ''}
                   aria-label={`Voce di ${c.name}`}
-                  onChange={(e) => setVoice(c.id, { voiceURI: e.target.value || null })}
+                  onChange={(e) =>
+                    e.target.value ? chooseVoice(c.id, e.target.value) : setVoice(c.id, { voiceURI: null })
+                  }
                 >
-                  <option value="">Voce predefinita</option>
+                  <option value="">
+                    Automatica
+                    {a?.source !== 'manual' && current ? `: ${nameOf(current)}` : ''}
+                  </option>
                   {usable.map((u) => (
                     <option key={u.uri} value={u.uri}>
-                      {u.name} ({u.lang}){u.local ? '' : ' · rete'}
+                      {label(u)}
                     </option>
                   ))}
                 </select>
+                {a?.source === 'missing' && (
+                  <p className="notice">
+                    La voce scelta per {c.name}
+                    {settings.voices[c.id]?.voiceName ? ` (${settings.voices[c.id]!.voiceName})` : ''} non è disponibile
+                    su questo dispositivo: la scelta resta salvata e tornerà in uso dove la voce c’è. Per ora è proposta{' '}
+                    {nameOf(current)}.
+                  </p>
+                )}
+                {a?.unverified && c.voice && (
+                  <p className="preview-result">
+                    Per {c.name} hai chiesto una voce {GENDER_LABEL[c.voice]}
+                    {g
+                      ? `, ma ${nameOf(current)} è indicata come ${GENDER_LABEL[g]}: scegli un’altra voce o correggi l’indicazione.`
+                      : `: non sappiamo se ${nameOf(current)} lo sia. Ascolta l’anteprima e indicalo qui sotto, oppure scegli un’altra voce.`}
+                  </p>
+                )}
+                {current && (
+                  <div className="row wrap gender">
+                    <span className="hint">
+                      {nameOf(current)} è una voce
+                      {vg?.source === 'known'
+                        ? ' (suggerimento dal nome della voce, non verificato: correggilo se all’ascolto non corrisponde)'
+                        : ''}
+                      :
+                    </span>
+                    {(['m', 'f'] as const).map((x) => (
+                      <button
+                        key={x}
+                        className={`btn ghost${g === x ? ' active' : ''}`}
+                        aria-pressed={g === x}
+                        onClick={() => setGender(current, vg?.source === 'user' && g === x ? null : x)}
+                      >
+                        {GENDER_LABEL[x]}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="sliders">
                   <label className="field">
                     Velocità {v.rate.toFixed(1)}
@@ -164,18 +296,18 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
                     />
                   </label>
                   <label className="field">
-                    Intonazione {v.pitch.toFixed(1)}
+                    Intonazione {(a?.pitch ?? v.pitch).toFixed(2)}
                     <input
                       type="range"
                       min={0.5}
                       max={1.5}
-                      step={0.1}
-                      value={v.pitch}
+                      step={0.05}
+                      value={a?.pitch ?? v.pitch}
                       onChange={(e) => setVoice(c.id, { pitch: Number(e.target.value) })}
                     />
                   </label>
                 </div>
-                <button className="btn" onClick={() => preview(c.id)} disabled={usable.length === 0}>
+                <button className="btn" onClick={() => preview(c.id)} disabled={!current}>
                   Ascolta anteprima
                 </button>
                 {result?.id === c.id && (
@@ -194,16 +326,25 @@ export default function Voices({ script, settings, voices, prefs, onPrefs, onCha
           </div>
           <select
             className="select"
-            value={usable.some((u) => u.uri === settings.narrator?.voiceURI) ? settings.narrator!.voiceURI! : ''}
+            value={findVoice(settings.narrator, usable)?.uri ?? ''}
             aria-label="Voce narrante"
             onChange={(e) =>
-              onChange({ narrator: { rate: 1, pitch: 1, ...settings.narrator, voiceURI: e.target.value || null } })
+              onChange({
+                narrator: {
+                  rate: 1,
+                  pitch: 1,
+                  ...settings.narrator,
+                  voiceURI: e.target.value || null,
+                  voiceName: usable.find((u) => u.uri === e.target.value)?.name,
+                  voiceLang: usable.find((u) => u.uri === e.target.value)?.lang,
+                },
+              })
             }
           >
-            <option value="">Voce predefinita</option>
+            <option value="">Prima voce disponibile</option>
             {usable.map((u) => (
               <option key={u.uri} value={u.uri}>
-                {u.name} ({u.lang}){u.local ? '' : ' · rete'}
+                {label(u)}
               </option>
             ))}
           </select>

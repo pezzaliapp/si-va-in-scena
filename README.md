@@ -33,9 +33,13 @@ Autore: **Alessandro Pezzali** · Licenza: [MIT](LICENSE)
 1. **Importa** un PDF dal dispositivo.
 2. **Verifica**: controlla personaggi e battute. Le parti incerte sono segnalate (⚠): puoi
    rinominare o unire personaggi, riattribuire, dividere, unire o eliminare passaggi, trasformare
-   una battuta in didascalia e viceversa.
+   una battuta in didascalia e viceversa. I nomi con poche battute molto simili a un altro
+   personaggio (es. una L letta come I) sono proposti per l'unione: nulla viene unito senza
+   conferma.
 3. **Ruolo**: rispondi a *“Quale personaggio interpreti?”*. Puoi cambiarlo quando vuoi.
-4. **Voci**: assegna una voce, velocità e intonazione a ogni personaggio e ascolta l'anteprima.
+4. **Voci**: ogni personaggio riceve una voce diversa; indica se preferisci una voce maschile o
+   femminile e l'app ne terrà conto. Puoi scegliere voce, velocità e intonazione e ascoltare
+   l'anteprima: le scelte restano salvate sul dispositivo.
 5. **Prova**: Avvia, Pausa, Continua, Ripeti, Precedente, Successiva.
    Da tastiera: Spazio, frecce, R.
 
@@ -63,6 +67,17 @@ L'app usa la Web Speech API del browser, cioè le voci già presenti nel sistema
   server del fornitore per sintetizzarlo. In **privacy rigorosa** (attiva per impostazione
   predefinita) l'app usa solo voci che il browser dichiara locali (`localService`). Questa
   indicazione è fornita dal browser e l'app non può verificarla in modo indipendente.
+- **Genere delle voci.** Il browser non dice se una voce è maschile o femminile. Per le voci
+  italiane di sistema più comuni (Alice, Eddy, Flo, Grandma, Grandpa, Reed, Rocko, Sandy,
+  Shelley, Luca, Federica, Paola, Elsa, Cosimo) l'app propone un'indicazione iniziale ricavata
+  dal nome della voce: è un suggerimento non verificato, che puoi correggere dopo l'anteprima;
+  per le altre voci puoi indicarlo tu. La tua indicazione prevale sempre.
+- **Voci maschili e femminili per i personaggi.** Il genere di un personaggio non viene mai
+  dedotto dal suo nome: va indicato nella scheda Voci (maschile/femminile). Finché non lo
+  indichi, l'app assegna voci diverse tra loro ma non sceglie voci maschili o femminili.
+- **Elenco delle voci.** Alcuni browser lo caricano a più riprese (Chrome su macOS: prima una
+  ventina di voci, poi tutte): l'app attende l'elenco completo. Una voce scelta viene ritrovata
+  per identificatore o per nome, mai per posizione; se manca sul dispositivo l'app lo segnala.
 - **Intonazione** non supportata da tutte le voci.
 - **Nessun riconoscimento vocale**: per proseguire dopo la tua battuta si usa “Continua”
   (o la barra spaziatrice). Il riconoscimento vocale dei browser è spesso remoto e non viene usato.
@@ -232,10 +247,15 @@ repository GitHub:
 cache del service worker e rende permanente quella dei file con hash. Nessun Worker, nessuna
 variabile d'ambiente, nessun servizio aggiuntivo.
 
-**Aggiornamenti.** Una nuova versione viene scaricata in background e si attiva solo quando
-l'utente tocca *Aggiorna* (o alla successiva apertura dell'app), così una prova in corso non
-viene interrotta. Copioni e impostazioni restano in IndexedDB e non sono toccati dagli
-aggiornamenti; se in futuro lo schema dei dati cambiasse, la migrazione dovrà conservarli.
+**Aggiornamenti.** Il service worker scarica le nuove versioni in background; l'app controlla
+all'apertura e quando torna in primo piano (non più di ogni 10 minuti, solo se c'è connessione).
+Quando una versione è pronta compare l'avviso “Nuova versione disponibile” con “Aggiorna ora”.
+Anche senza premerlo, l'aggiornamento si applica da solo al primo momento sicuro: con l'elenco dei
+copioni aperto o con l'app in secondo piano. Mai durante una prova (anche in pausa o sul turno
+dell'attore) né durante un'importazione: in quel caso viene rinviato. Un solo ricaricamento per
+versione, nessun aggiornamento senza connessione. Copioni e impostazioni restano in IndexedDB e
+non sono toccati dagli aggiornamenti; se in futuro lo schema dei dati cambiasse, la migrazione
+dovrà conservarli.
 
 ### Protezione dei copioni nel repository
 

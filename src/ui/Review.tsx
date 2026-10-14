@@ -7,17 +7,37 @@ import {
   mergeWithPrevious,
   removeCharacter,
   renameCharacter,
+  setCharacterVoice,
   speakerLabel,
   splitBlock,
   updateBlock,
 } from '../script/edit';
 import { CUE_STYLE_LABEL } from '../parser/parse';
-import { EVERYONE, type Block, type BlockKind, type CueStyle, type Script } from '../types';
+import { mergeSettings, suggestMerges } from '../script/similar';
+import {
+  EVERYONE,
+  type Block,
+  type BlockKind,
+  type CueStyle,
+  type Script,
+  type ScriptSettings,
+  type VoiceGender,
+} from '../types';
 
 interface Props {
   script: Script;
+  settings: ScriptSettings;
   onChange(s: Script): void;
+  onSettings(patch: Partial<ScriptSettings>): void;
   onDone(): void;
+}
+
+/** Nome della voce di sistema, per i conflitti tra impostazioni. */
+function voiceName(uri: string | null | undefined): string {
+  if (!uri) return 'voce predefinita';
+  const v =
+    typeof window !== 'undefined' ? window.speechSynthesis?.getVoices().find((x) => x.voiceURI === uri) : undefined;
+  return v?.name ?? 'voce non disponibile su questo dispositivo';
 }
 
 const PAGE = 80;
@@ -29,7 +49,7 @@ const KIND_LABEL: Record<BlockKind, string> = {
   cast: 'Elenco personaggi',
 };
 
-export default function Review({ script, onChange, onDone }: Props) {
+export default function Review({ script, settings, onChange, onSettings, onDone }: Props) {
   const [onlyAmbiguous, setOnlyAmbiguous] = useState(false);
   const [limit, setLimit] = useState(PAGE);
   const [editing, setEditing] = useState<string | null>(null);
@@ -38,6 +58,25 @@ export default function Review({ script, onChange, onDone }: Props) {
   const ambiguous = script.blocks.filter((b) => b.ambiguous).length;
   const visible = (onlyAmbiguous ? script.blocks.filter((b) => b.ambiguous) : script.blocks).slice(0, limit);
   const total = onlyAmbiguous ? ambiguous : script.blocks.length;
+  const suggestions = useMemo(() => suggestMerges(script, script.dismissedMerges), [script]);
+  const suspects = new Set(suggestions.map((sg) => sg.fromId));
+  // I nomi da controllare per primi; gli altri nell'ordine del copione.
+  const characters = [...script.characters].sort((a, b) => +suspects.has(b.id) - +suspects.has(a.id));
+  const [conflict, setConflict] = useState<{ from: string; into: string } | null>(null);
+  const [manual, setManual] = useState({ from: '', into: '' });
+  const nameOf = (id: string) => script.characters.find((c) => c.id === id)?.name ?? '';
+
+  // Unione: battute invariate; ruolo e voce passano al personaggio unito.
+  // Se entrambi hanno una voce diversa, si chiede quale tenere.
+  const merge = (from: string, into: string, keep?: 'into' | 'from') => {
+    const outcome = mergeSettings(settings, from, into, keep);
+    if (outcome.voiceConflict && !keep) return setConflict({ from, into });
+    setConflict(null);
+    onChange(mergeCharacters(script, from, into));
+    onSettings({ role: outcome.settings.role, voices: outcome.settings.voices });
+  };
+  const dismiss = (id: string) => onChange({ ...script, dismissedMerges: [...(script.dismissedMerges ?? []), id] });
+  const firstLine = (id: string) => script.blocks.find((b) => b.kind === 'speech' && b.speakers.includes(id))?.text;
 
   return (
     <div className="stack">
@@ -55,11 +94,71 @@ export default function Review({ script, onChange, onDone }: Props) {
         {script.stats && <Diagnostics stats={script.stats} />}
       </section>
 
+      {conflict && (
+        <section className="panel notice" role="alert">
+          <p>
+            «{nameOf(conflict.from)}» e «{nameOf(conflict.into)}» hanno voci diverse. Quale tenere per{' '}
+            {nameOf(conflict.into)}?
+          </p>
+          <div className="row wrap">
+            <button className="btn" onClick={() => merge(conflict.from, conflict.into, 'into')}>
+              {voiceName(settings.voices[conflict.into]?.voiceURI)} (di {nameOf(conflict.into)})
+            </button>
+            <button className="btn" onClick={() => merge(conflict.from, conflict.into, 'from')}>
+              {voiceName(settings.voices[conflict.from]?.voiceURI)} (di {nameOf(conflict.from)})
+            </button>
+            <button className="btn ghost" onClick={() => setConflict(null)}>
+              Annulla
+            </button>
+          </div>
+        </section>
+      )}
+
+      {suggestions.length > 0 && (
+        <section className="panel">
+          <h3>Nomi da controllare ({suggestions.length})</h3>
+          <p className="hint">
+            Questi nomi compaiono in poche battute e somigliano molto a un altro personaggio: potrebbero essere errori
+            di battitura o di lettura del PDF. Nulla viene unito senza la tua conferma e il testo delle battute non
+            cambia.
+          </p>
+          <ul className="char-list">
+            {suggestions.map((sg) => (
+              <li key={sg.fromId} className="suggestion">
+                <p>
+                  <strong>{nameOf(sg.fromId)}</strong> ({counts.get(sg.fromId) ?? 0}{' '}
+                  {counts.get(sg.fromId) === 1 ? 'battuta' : 'battute'}) potrebbe essere{' '}
+                  {sg.intoIds.map((id, i) => (
+                    <span key={id}>
+                      {i > 0 ? ' oppure ' : ''}
+                      <strong>{nameOf(id)}</strong> ({counts.get(id) ?? 0}{' '}
+                      {counts.get(id) === 1 ? 'battuta' : 'battute'})
+                    </span>
+                  ))}
+                  .
+                </p>
+                {firstLine(sg.fromId) && <p className="hint">Battuta: «{firstLine(sg.fromId)!.slice(0, 120)}»</p>}
+                <div className="row wrap">
+                  {sg.intoIds.map((id) => (
+                    <button key={id} className="btn" onClick={() => merge(sg.fromId, id)}>
+                      Unisci in {nameOf(id)}
+                    </button>
+                  ))}
+                  <button className="btn ghost" onClick={() => dismiss(sg.fromId)}>
+                    Non è un errore
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="panel">
         <h3>Personaggi ({script.characters.length})</h3>
         <ul className="char-list">
-          {script.characters.map((c) => (
-            <li key={c.id} className="char-row">
+          {characters.map((c) => (
+            <li key={c.id} className={`char-row${suspects.has(c.id) ? ' suspect' : ''}`}>
               <input
                 className="input"
                 defaultValue={c.name}
@@ -70,29 +169,22 @@ export default function Review({ script, onChange, onDone }: Props) {
                   }
                 }}
               />
-              <span className="count">{counts.get(c.id) ?? 0} battute</span>
-              {script.characters.length > 1 && (
-                <select
-                  className="select"
-                  value=""
-                  aria-label={`Unisci ${c.name} a un altro personaggio`}
-                  onChange={(e) => {
-                    const target = script.characters.find((x) => x.id === e.target.value);
-                    if (target && confirm(`Unire "${c.name}" a "${target.name}"?`)) {
-                      onChange(mergeCharacters(script, c.id, target.id));
-                    }
-                  }}
-                >
-                  <option value="">Unisci a…</option>
-                  {script.characters
-                    .filter((x) => x.id !== c.id)
-                    .map((x) => (
-                      <option key={x.id} value={x.id}>
-                        {x.name}
-                      </option>
-                    ))}
-                </select>
-              )}
+              <span className="count">
+                {counts.get(c.id) ?? 0} {counts.get(c.id) === 1 ? 'battuta' : 'battute'}
+                {suspects.has(c.id) ? ' · da controllare' : ''}
+              </span>
+              <select
+                className="select"
+                value={c.voice ?? ''}
+                aria-label={`Voce desiderata per ${c.name}`}
+                onChange={(e) =>
+                  onChange(setCharacterVoice(script, c.id, (e.target.value || undefined) as VoiceGender | undefined))
+                }
+              >
+                <option value="">Voce: da scegliere</option>
+                <option value="m">Voce maschile</option>
+                <option value="f">Voce femminile</option>
+              </select>
               {!counts.get(c.id) && (
                 <button className="btn ghost danger" onClick={() => onChange(removeCharacter(script, c.id))}>
                   Rimuovi
@@ -101,6 +193,44 @@ export default function Review({ script, onChange, onDone }: Props) {
             </li>
           ))}
         </ul>
+        {script.characters.length > 1 && (
+          <details className="manual-merge">
+            <summary>Unisci due personaggi</summary>
+            <p className="hint">Per un errore non segnalato: le battute del primo passano al secondo.</p>
+            <div className="row wrap">
+              {(['from', 'into'] as const).map((k) => (
+                <select
+                  key={k}
+                  className="select"
+                  value={manual[k]}
+                  aria-label={k === 'from' ? 'Personaggio da unire' : 'Unisci in'}
+                  onChange={(e) => setManual({ ...manual, [k]: e.target.value })}
+                >
+                  <option value="">{k === 'from' ? 'Personaggio…' : 'Unisci in…'}</option>
+                  {script.characters
+                    .filter((x) => x.id !== (k === 'from' ? manual.into : manual.from))
+                    .map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.name}
+                      </option>
+                    ))}
+                </select>
+              ))}
+              <button
+                className="btn"
+                disabled={!manual.from || !manual.into}
+                onClick={() => {
+                  if (confirm(`Unire "${nameOf(manual.from)}" a "${nameOf(manual.into)}"?`)) {
+                    merge(manual.from, manual.into);
+                    setManual({ from: '', into: '' });
+                  }
+                }}
+              >
+                Unisci
+              </button>
+            </div>
+          </details>
+        )}
         <form
           className="row"
           onSubmit={(e) => {

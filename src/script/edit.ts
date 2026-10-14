@@ -1,5 +1,8 @@
 // Correzioni manuali del copione. Ogni funzione restituisce un nuovo oggetto.
-import { EVERYONE, type Block, type Script } from '../types';
+import { EVERYONE, type Block, type Script, type VoiceGender } from '../types';
+
+/** Inizio dell'avviso che il parser assegna ai personaggi con una sola battuta. */
+const SINGLE_LINE_NOTE = 'Personaggio con una sola battuta';
 
 function touch(script: Script, patch: Partial<Script>): Script {
   return { ...script, ...patch, updatedAt: Date.now() };
@@ -16,15 +19,31 @@ export function renameCharacter(script: Script, id: string, name: string): Scrip
 }
 
 /** Unisce il personaggio `fromId` in `intoId` (es. due grafie dello stesso nome). */
+/**
+ * Unisce un personaggio in un altro: le battute restano identiche, cambia solo
+ * chi le pronuncia. L'avviso "personaggio con una sola battuta" decade.
+ */
 export function mergeCharacters(script: Script, fromId: string, intoId: string): Script {
   if (fromId === intoId) return script;
   return touch(script, {
     characters: script.characters.filter((c) => c.id !== fromId),
-    blocks: script.blocks.map((b) =>
-      b.speakers.includes(fromId)
-        ? { ...b, speakers: [...new Set(b.speakers.map((s) => (s === fromId ? intoId : s)))] }
-        : b,
-    ),
+    dismissedMerges: script.dismissedMerges?.filter((id) => id !== fromId),
+    blocks: script.blocks.map((b) => {
+      if (!b.speakers.includes(fromId)) return b;
+      const { ambiguous, ...rest } = b;
+      return {
+        ...rest,
+        ...(ambiguous && !ambiguous.startsWith(SINGLE_LINE_NOTE) ? { ambiguous } : {}),
+        speakers: [...new Set(b.speakers.map((s) => (s === fromId ? intoId : s)))],
+      };
+    }),
+  });
+}
+
+/** Voce desiderata per un personaggio (indicata dall'attore). */
+export function setCharacterVoice(script: Script, id: string, voice: VoiceGender | undefined): Script {
+  return touch(script, {
+    characters: script.characters.map((c) => (c.id !== id ? c : voice ? { ...c, voice } : { id: c.id, name: c.name })),
   });
 }
 

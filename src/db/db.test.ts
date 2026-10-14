@@ -48,7 +48,7 @@ describe('salvataggio locale', () => {
 
   it('salva le preferenze con la privacy rigorosa attiva per impostazione predefinita', async () => {
     expect((await getPrefs()).strictPrivacy).toBe(true);
-    await savePrefs({ strictPrivacy: false });
+    await savePrefs({ strictPrivacy: false, voiceGenders: {} });
     expect((await getPrefs()).strictPrivacy).toBe(false);
   });
 });
@@ -66,7 +66,7 @@ describe('eliminazione dati', () => {
 
   it('cancella tutti i dati', async () => {
     await saveScript(sample('a'));
-    await savePrefs({ strictPrivacy: false });
+    await savePrefs({ strictPrivacy: false, voiceGenders: {} });
     await deleteAllData();
     expect(await listScripts()).toEqual([]);
     expect((await getPrefs()).strictPrivacy).toBe(true);
