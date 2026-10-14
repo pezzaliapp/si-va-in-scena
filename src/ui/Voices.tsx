@@ -4,8 +4,8 @@ import { spokenText } from '../script/segments';
 import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
 import {
   appLang,
-  assignVoices,
   findVoice,
+  scriptVoices,
   sortVoices,
   speechSupported,
   toInfo,
@@ -53,15 +53,7 @@ export default function Voices({
   const usable = sortVoices(usableVoices(infos, prefs.strictPrivacy), lang);
   const counts = useMemo(() => lineCounts(script), [script]);
   const genders = prefs.voiceGenders;
-  const assignment = assignVoices({
-    characters: script.characters,
-    role: settings.role,
-    settings: settings.voices,
-    voices: usable,
-    lang,
-    genders,
-    counts,
-  });
+  const assignment = scriptVoices(script.characters, settings, infos, prefs, counts);
   const remoteCount = infos.filter((v) => !v.local).length;
   const localCount = infos.filter((v) => v.local).length;
   const others = script.characters.filter((c) => c.id !== settings.role);

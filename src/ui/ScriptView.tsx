@@ -104,6 +104,9 @@ export default function ScriptView({ scriptId, initialTab, prefs, onPrefs, onClo
         <Review
           script={script}
           settings={settings}
+          voices={voices}
+          voicesReady={voicesReady}
+          prefs={prefs}
           onChange={updateScript}
           onSettings={updateSettings}
           onDone={() => setTab('role')}

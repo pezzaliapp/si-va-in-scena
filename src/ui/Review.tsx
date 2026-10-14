@@ -13,12 +13,14 @@ import {
   updateBlock,
 } from '../script/edit';
 import { CUE_STYLE_LABEL } from '../parser/parse';
-import { mergeSettings, suggestMerges } from '../script/similar';
+import { mergeSettings, planBulkMerges, suggestMerges } from '../script/similar';
+import { scriptVoices, toInfo } from '../speech/voices';
 import {
   EVERYONE,
   type Block,
   type BlockKind,
   type CueStyle,
+  type GlobalPrefs,
   type Script,
   type ScriptSettings,
   type VoiceGender,
@@ -27,6 +29,10 @@ import {
 interface Props {
   script: Script;
   settings: ScriptSettings;
+  voices: SpeechSynthesisVoice[];
+  /** L'elenco delle voci del browser è completo. */
+  voicesReady: boolean;
+  prefs: GlobalPrefs;
   onChange(s: Script): void;
   onSettings(patch: Partial<ScriptSettings>): void;
   onDone(): void;
@@ -49,7 +55,7 @@ const KIND_LABEL: Record<BlockKind, string> = {
   cast: 'Elenco personaggi',
 };
 
-export default function Review({ script, settings, onChange, onSettings, onDone }: Props) {
+export default function Review({ script, settings, voices, voicesReady, prefs, onChange, onSettings, onDone }: Props) {
   const [onlyAmbiguous, setOnlyAmbiguous] = useState(false);
   const [limit, setLimit] = useState(PAGE);
   const [editing, setEditing] = useState<string | null>(null);
@@ -65,6 +71,22 @@ export default function Review({ script, settings, onChange, onSettings, onDone 
   const [conflict, setConflict] = useState<{ from: string; into: string } | null>(null);
   const [manual, setManual] = useState({ from: '', into: '' });
   const nameOf = (id: string) => script.characters.find((c) => c.id === id)?.name ?? '';
+  const lines = (id: string) => `${counts.get(id) ?? 0} ${counts.get(id) === 1 ? 'battuta' : 'battute'}`;
+  const plan = planBulkMerges(script, settings, suggestions);
+  const excluded = new Map(plan.individual.map((sg) => [sg.fromId, sg.reason]));
+  // Voce effettiva di ogni personaggio, calcolata come nella scheda Voci.
+  const infos = useMemo(() => voices.map(toInfo), [voices]);
+  const assigned = voicesReady ? scriptVoices(script.characters, settings, infos, prefs, counts).byId : null;
+  const voiceLabel = (id: string) => {
+    if (id === settings.role) return 'Voce: è il tuo ruolo';
+    if (!assigned) return 'Voce: caricamento dell’elenco delle voci…';
+    const a = assigned[id];
+    const name = infos.find((v) => v.uri === a?.voiceURI)?.name;
+    if (!a || !name) return 'Voce: nessuna voce disponibile su questo dispositivo';
+    if (a.source === 'manual') return `Voce: ${name} (scelta da te)`;
+    if (a.source === 'missing') return `Voce: ${name} (proposta: la voce scelta non è su questo dispositivo)`;
+    return `Voce: ${name} (proposta automatica)`;
+  };
 
   // Unione: battute invariate; ruolo e voce passano al personaggio unito.
   // Se entrambi hanno una voce diversa, si chiede quale tenere.
@@ -75,24 +97,48 @@ export default function Review({ script, settings, onChange, onSettings, onDone 
     onChange(mergeCharacters(script, from, into));
     onSettings({ role: outcome.settings.role, voices: outcome.settings.voices });
   };
+  // Conferma collettiva: solo le unioni elencate nel riepilogo, in una sola operazione.
+  const confirmAll = () => {
+    setConflict(null);
+    onChange(plan.script);
+    onSettings({ role: plan.settings.role, voices: plan.settings.voices });
+  };
   const dismiss = (id: string) => onChange({ ...script, dismissedMerges: [...(script.dismissedMerges ?? []), id] });
   const firstLine = (id: string) => script.blocks.find((b) => b.kind === 'speech' && b.speakers.includes(id))?.text;
 
   return (
     <div className="stack">
-      <section className="panel">
-        <h2>Verifica il copione</h2>
-        <p className="hint">
-          Controlla che personaggi e battute siano stati riconosciuti correttamente. Le parti incerte sono segnalate:
-          l’app non inventa nulla, ma può sbagliare l’attribuzione.
-        </p>
-        {script.warnings.map((w) => (
-          <p key={w} className="notice">
-            {w}
+      {suggestions.length > 0 && (
+        <section className="panel corrections">
+          <h2>Correzioni suggerite</h2>
+          <p className="hint">
+            Alcuni nomi compaiono in poche battute e somigliano molto a un altro personaggio: probabilmente sono errori
+            di lettura del PDF. Nulla viene unito senza la tua conferma; il testo delle battute non cambia e il PDF
+            originale non viene modificato.
           </p>
-        ))}
-        {script.stats && <Diagnostics stats={script.stats} />}
-      </section>
+          {plan.merges.length > 0 && (
+            <>
+              <ul className="merge-summary">
+                {plan.merges.map((m) => (
+                  <li key={m.fromId}>
+                    <strong>{nameOf(m.fromId)}</strong> ({lines(m.fromId)}) → <strong>{nameOf(m.intoId)}</strong> (
+                    {lines(m.intoId)})
+                  </li>
+                ))}
+              </ul>
+              <button className="btn primary" onClick={confirmAll}>
+                Conferma le correzioni suggerite ({plan.merges.length})
+              </button>
+            </>
+          )}
+          {plan.individual.length > 0 && (
+            <p className="hint">
+              {plan.individual.length === 1 ? 'Un nome va deciso' : `${plan.individual.length} nomi vanno decisi`}{' '}
+              singolarmente, qui sotto.
+            </p>
+          )}
+        </section>
+      )}
 
       {conflict && (
         <section className="panel notice" role="alert">
@@ -116,12 +162,7 @@ export default function Review({ script, settings, onChange, onSettings, onDone 
 
       {suggestions.length > 0 && (
         <section className="panel">
-          <h3>Nomi da controllare ({suggestions.length})</h3>
-          <p className="hint">
-            Questi nomi compaiono in poche battute e somigliano molto a un altro personaggio: potrebbero essere errori
-            di battitura o di lettura del PDF. Nulla viene unito senza la tua conferma e il testo delle battute non
-            cambia.
-          </p>
+          <h3>Nomi da controllare uno per uno ({suggestions.length})</h3>
           <ul className="char-list">
             {suggestions.map((sg) => (
               <li key={sg.fromId} className="suggestion">
@@ -137,6 +178,16 @@ export default function Review({ script, settings, onChange, onSettings, onDone 
                   ))}
                   .
                 </p>
+                {excluded.has(sg.fromId) && (
+                  <p className="hint">
+                    Esclusa dalla conferma collettiva:{' '}
+                    {excluded.get(sg.fromId) === 'candidati'
+                      ? 'più personaggi possibili, scegli tu.'
+                      : excluded.get(sg.fromId) === 'voci'
+                        ? 'i due personaggi hanno voci scelte diverse, scegli quale tenere.'
+                        : 'il personaggio proposto è a sua volta da controllare.'}
+                  </p>
+                )}
                 {firstLine(sg.fromId) && <p className="hint">Battuta: «{firstLine(sg.fromId)!.slice(0, 120)}»</p>}
                 <div className="row wrap">
                   {sg.intoIds.map((id) => (
@@ -153,6 +204,20 @@ export default function Review({ script, settings, onChange, onSettings, onDone 
           </ul>
         </section>
       )}
+
+      <section className="panel">
+        <h2>Verifica il copione</h2>
+        <p className="hint">
+          Controlla che personaggi e battute siano stati riconosciuti correttamente. Le parti incerte sono segnalate:
+          l’app non inventa nulla, ma può sbagliare l’attribuzione.
+        </p>
+        {script.warnings.map((w) => (
+          <p key={w} className="notice">
+            {w}
+          </p>
+        ))}
+        {script.stats && <Diagnostics stats={script.stats} />}
+      </section>
 
       <section className="panel">
         <h3>Personaggi ({script.characters.length})</h3>
@@ -176,15 +241,16 @@ export default function Review({ script, settings, onChange, onSettings, onDone 
               <select
                 className="select"
                 value={c.voice ?? ''}
-                aria-label={`Voce desiderata per ${c.name}`}
+                aria-label={`Genere della voce per ${c.name}`}
                 onChange={(e) =>
                   onChange(setCharacterVoice(script, c.id, (e.target.value || undefined) as VoiceGender | undefined))
                 }
               >
-                <option value="">Voce: da scegliere</option>
-                <option value="m">Voce maschile</option>
-                <option value="f">Voce femminile</option>
+                <option value="">Genere della voce: da indicare</option>
+                <option value="m">Genere della voce: maschile</option>
+                <option value="f">Genere della voce: femminile</option>
               </select>
+              <span className="hint voice-used">{voiceLabel(c.id)}</span>
               {!counts.get(c.id) && (
                 <button className="btn ghost danger" onClick={() => onChange(removeCharacter(script, c.id))}>
                   Rimuovi

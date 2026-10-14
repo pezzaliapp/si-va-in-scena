@@ -1,4 +1,4 @@
-import type { Character, VoiceGender, VoiceSetting } from '../types';
+import type { Character, GlobalPrefs, ScriptSettings, VoiceGender, VoiceSetting } from '../types';
 
 /** Dati essenziali di una voce di sistema (indipendenti dall'oggetto del browser). */
 export interface VoiceInfo {
@@ -230,6 +230,25 @@ export function assignVoices(input: {
     };
   }
   return { byId, pool, shared };
+}
+
+/** Voci dei personaggi di un copione con le preferenze dell'attore: la stessa per Verifica, Voci e Prova. */
+export function scriptVoices(
+  characters: Character[],
+  settings: Pick<ScriptSettings, 'role' | 'voices'>,
+  voices: VoiceInfo[],
+  prefs: GlobalPrefs,
+  counts: Map<string, number>,
+): AssignmentResult {
+  return assignVoices({
+    characters,
+    role: settings.role,
+    settings: settings.voices,
+    voices: usableVoices(voices, prefs.strictPrivacy),
+    lang: appLang(),
+    genders: prefs.voiceGenders,
+    counts,
+  });
 }
 
 /**

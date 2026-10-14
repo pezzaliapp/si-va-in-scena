@@ -5,7 +5,7 @@ import { RehearsalEngine, realTimer, type EngineState } from '../rehearsal/engin
 import { buildPlan, nextActorIndex } from '../rehearsal/plan';
 import { lineCounts, speakerLabel } from '../script/edit';
 import { START_TIMEOUT_MS, WebSpeechSpeaker } from '../speech/speaker';
-import { appLang, assignVoices, resolveVoice, speechSupported, toInfo, usableVoices } from '../speech/voices';
+import { appLang, resolveVoice, scriptVoices, speechSupported, toInfo } from '../speech/voices';
 import type { GlobalPrefs, Mode, Script, ScriptSettings } from '../types';
 import { setBusy } from '../update';
 
@@ -58,15 +58,7 @@ export default function Rehearsal({ script, settings, voices, voicesReady, prefs
   const counts = useMemo(() => lineCounts(script), [script]);
   const missing = voicesReady
     ? Object.entries(
-        assignVoices({
-          characters: script.characters,
-          role: settings.role,
-          settings: settings.voices,
-          voices: usableVoices(infos, prefs.strictPrivacy),
-          lang: appLang(),
-          genders: prefs.voiceGenders,
-          counts,
-        }).byId,
+        scriptVoices(script.characters, settings, infos, prefs, counts).byId,
       )
         .filter(([, a]) => a.source === 'missing')
         .map(([id, a]) => ({
@@ -90,15 +82,7 @@ export default function Rehearsal({ script, settings, voices, voicesReady, prefs
         const infos = v.map(toInfo);
         // Stessa assegnazione mostrata nella scheda Voci: voci diverse, scelte dell'attore rispettate.
         if (!narrator && character) {
-          const a = assignVoices({
-            characters: script.characters,
-            role: s.role,
-            settings: s.voices,
-            voices: usableVoices(infos, p.strictPrivacy),
-            lang: appLang(),
-            genders: p.voiceGenders,
-            counts,
-          }).byId[character];
+          const a = scriptVoices(script.characters, s, infos, p, counts).byId[character];
           if (a?.voiceURI) return { voiceURI: a.voiceURI, rate: a.rate, pitch: a.pitch };
         }
         const setting = narrator ? s.narrator : character ? s.voices[character] : undefined;

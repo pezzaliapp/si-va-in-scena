@@ -25,8 +25,12 @@ export function renameCharacter(script: Script, id: string, name: string): Scrip
  */
 export function mergeCharacters(script: Script, fromId: string, intoId: string): Script {
   if (fromId === intoId) return script;
+  // Il genere della voce indicato per il nome errato vale per il personaggio unito, se non ne ha uno.
+  const fromVoice = script.characters.find((c) => c.id === fromId)?.voice;
   return touch(script, {
-    characters: script.characters.filter((c) => c.id !== fromId),
+    characters: script.characters
+      .filter((c) => c.id !== fromId)
+      .map((c) => (c.id === intoId && !c.voice && fromVoice ? { ...c, voice: fromVoice } : c)),
     dismissedMerges: script.dismissedMerges?.filter((id) => id !== fromId),
     blocks: script.blocks.map((b) => {
       if (!b.speakers.includes(fromId)) return b;

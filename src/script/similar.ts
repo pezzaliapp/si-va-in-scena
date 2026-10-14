@@ -1,7 +1,7 @@
 // Suggerimenti di unione per nomi di personaggi probabilmente errati (errori di
 // battitura o di riconoscimento del testo, es. una L letta come I). Regole
 // generali, nessun nome predefinito; solo proposte: l'unione la decide l'attore.
-import { lineCounts } from './edit';
+import { lineCounts, mergeCharacters } from './edit';
 import type { Script } from '../types';
 
 export interface MergeSuggestion {
@@ -105,4 +105,47 @@ export function mergeSettings<
     settings: { ...settings, role: settings.role === fromId ? intoId : settings.role, voices },
     voiceConflict: differ,
   };
+}
+
+type VoiceSettings = {
+  role: string | null;
+  voices: Record<string, { voiceURI: string | null; rate: number; pitch: number }>;
+};
+
+export interface BulkPlan<S> {
+  /** Unioni applicate dalla conferma collettiva, nell'ordine. */
+  merges: { fromId: string; intoId: string }[];
+  /** Suggerimenti da decidere singolarmente, con il motivo. */
+  individual: (MergeSuggestion & { reason: 'candidati' | 'voci' | 'catena' })[];
+  /** Copione e impostazioni dopo le unioni. */
+  script: Script;
+  settings: S;
+}
+
+/**
+ * Conferma collettiva: solo i suggerimenti con un unico candidato, in cui il
+ * personaggio proposto non è a sua volta sospetto e senza voci scelte diverse
+ * da conciliare. Gli altri restano da decidere uno per uno.
+ */
+export function planBulkMerges<S extends VoiceSettings>(
+  script: Script,
+  settings: S,
+  suggestions: MergeSuggestion[],
+): BulkPlan<S> {
+  const suspects = new Set(suggestions.map((s) => s.fromId));
+  const plan: BulkPlan<S> = { merges: [], individual: [], script, settings };
+  for (const sg of suggestions) {
+    const intoId = sg.intoIds[0]!;
+    const outcome = mergeSettings(plan.settings, sg.fromId, intoId);
+    const reason =
+      sg.intoIds.length !== 1 ? 'candidati' : suspects.has(intoId) ? 'catena' : outcome.voiceConflict ? 'voci' : null;
+    if (reason) {
+      plan.individual.push({ ...sg, reason });
+      continue;
+    }
+    plan.merges.push({ fromId: sg.fromId, intoId });
+    plan.script = mergeCharacters(plan.script, sg.fromId, intoId);
+    plan.settings = outcome.settings;
+  }
+  return plan;
 }

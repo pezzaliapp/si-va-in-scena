@@ -4,7 +4,7 @@ import { linesFromText } from '../parser/lines';
 import { parseScript } from '../parser/parse';
 import { defaultSettings } from '../types';
 import { lineCounts, mergeCharacters } from './edit';
-import { editDistance, mergeSettings, normalizeName, suggestMerges } from './similar';
+import { editDistance, mergeSettings, normalizeName, planBulkMerges, suggestMerges } from './similar';
 
 const rep = (name: string, n: number) =>
   Array.from({ length: n }, (_, i) => `${name}: Battuta numero ${i + 1} di ${name.toLowerCase()}.`).join('\n');
@@ -167,5 +167,88 @@ describe('sette personaggi e quattro nomi errati', () => {
   it('non propone unioni tra personaggi reali con un numero di battute paragonabile', () => {
     const two = parseScript(linesFromText(`${rep('MARIO', 20)}\n${rep('MARIA', 6)}`), { fileName: 'm.pdf' });
     expect(suggestMerges(two)).toEqual([]);
+  });
+});
+
+describe('conferma collettiva delle correzioni', () => {
+  const settings = defaultSettings(CAST.id);
+  const nameIn = (sc: typeof CAST, i: string) => sc.characters.find((c) => c.id === i)?.name;
+
+  it('11 nomi → 7 personaggi con una sola conferma, senza perdere battute', () => {
+    const plan = planBulkMerges(CAST, settings, suggestMerges(CAST));
+    expect(plan.merges).toHaveLength(4);
+    expect(plan.individual).toEqual([]);
+    expect(plan.script.characters).toHaveLength(7);
+    const before = [...lineCounts(CAST).values()].reduce((a, b) => a + b, 0);
+    const after = lineCounts(plan.script);
+    expect([...after.values()].reduce((a, b) => a + b, 0)).toBe(before);
+    expect(after.get(cid('ALICE'))).toBe(19);
+    expect(plan.script.blocks.map((b) => b.text)).toEqual(CAST.blocks.map((b) => b.text));
+    expect(suggestMerges(plan.script)).toEqual([]);
+  });
+
+  it('nulla cambia finché non si conferma: il piano non modifica il copione di partenza', () => {
+    planBulkMerges(CAST, settings, suggestMerges(CAST));
+    expect(CAST.characters).toHaveLength(11);
+  });
+
+  it('i casi ambigui restano da decidere singolarmente', () => {
+    const plan = planBulkMerges(SCRIPT, defaultSettings(SCRIPT.id), suggestMerges(SCRIPT));
+    expect(plan.individual.map((x) => [names([x.fromId])[0], x.reason])).toEqual([['MARIE', 'candidati']]);
+    expect(plan.merges).toHaveLength(4);
+    expect(plan.script.characters.some((c) => c.name === 'MARIE')).toBe(true);
+  });
+
+  it('voci scelte diverse: esclusa dalla conferma collettiva, le altre si applicano', () => {
+    const st = {
+      ...settings,
+      voices: {
+        [cid('AUCE')]: { voiceURI: 'v1', rate: 1, pitch: 1 },
+        [cid('ALICE')]: { voiceURI: 'v2', rate: 1, pitch: 1 },
+      },
+    };
+    const plan = planBulkMerges(CAST, st, suggestMerges(CAST));
+    expect(plan.individual.map((x) => [nameIn(CAST, x.fromId), x.reason])).toEqual([['AUCE', 'voci']]);
+    expect(plan.merges.map((m) => nameIn(CAST, m.fromId)).sort()).toEqual(['AIACE', 'CARIA', 'WAI.TER']);
+    expect(plan.settings.voices[cid('ALICE')]!.voiceURI).toBe('v2');
+    expect(plan.settings.voices[cid('AUCE')]).toEqual({ voiceURI: 'v1', rate: 1, pitch: 1 });
+  });
+
+  it('conflitto che nasce da un’unione precedente: la seconda resta da decidere', () => {
+    const st = {
+      ...settings,
+      voices: {
+        [cid('AUCE')]: { voiceURI: 'v1', rate: 1, pitch: 1 },
+        [cid('AIACE')]: { voiceURI: 'v2', rate: 1, pitch: 1 },
+      },
+    };
+    const plan = planBulkMerges(CAST, st, suggestMerges(CAST));
+    expect(plan.individual).toHaveLength(1);
+    expect(plan.settings.voices[cid('ALICE')]).toBeDefined();
+  });
+
+  it('ruolo, voce scelta e genere della voce passano al personaggio unito', () => {
+    const marked = {
+      ...CAST,
+      characters: CAST.characters.map((c) => (c.name === 'AUCE' ? { ...c, voice: 'f' as const } : c)),
+    };
+    const st = {
+      ...settings,
+      role: cid('WAI.TER'),
+      voices: { [cid('CARIA')]: { voiceURI: 'v3', rate: 1.1, pitch: 1 } },
+    };
+    const plan = planBulkMerges(marked, st, suggestMerges(marked));
+    expect(plan.settings.role).toBe(cid('WALTER'));
+    expect(plan.settings.voices[cid('CARLA')]).toEqual({ voiceURI: 'v3', rate: 1.1, pitch: 1 });
+    expect(plan.script.characters.find((c) => c.name === 'ALICE')!.voice).toBe('f');
+  });
+
+  it('nome proposto a sua volta sospetto: nessuna unione a catena automatica', () => {
+    const chain = parseScript(linesFromText(`${rep('CARLONE', 20)}\n${rep('CARLO', 5)}\nCARIO: Eccomi.`), {
+      fileName: 'c.pdf',
+    });
+    const plan = planBulkMerges(chain, defaultSettings(chain.id), suggestMerges(chain));
+    expect(plan.individual.map((x) => [nameIn(chain, x.fromId), x.reason])).toEqual([['CARIO', 'catena']]);
+    expect(plan.merges.map((m) => nameIn(chain, m.fromId))).toEqual(['CARLO']);
   });
 });

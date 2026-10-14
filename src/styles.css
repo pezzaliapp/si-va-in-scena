@@ -412,6 +412,14 @@ section + section {
   border-radius: 8px;
   padding: 8px;
 }
+.char-row .voice-used {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.merge-summary {
+  margin: 8px 0 12px;
+  padding-left: 20px;
+}
 .manual-merge {
   margin: 4px 0 16px;
 }
